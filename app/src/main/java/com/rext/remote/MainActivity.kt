@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -76,13 +77,13 @@ import com.rext.remote.connection.AdbRemoteClient
 import com.rext.remote.connection.BluetoothHidRemote
 import com.rext.remote.connection.HidConnectionState
 import com.rext.remote.connection.MouseButton
+import com.rext.remote.connection.MiLinkRemote
 import com.rext.remote.connection.NavigationKey
 import com.rext.remote.connection.TvApp
 import com.rext.remote.connection.TvIdentity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 
 private val Ink = Color.Black
@@ -117,6 +118,8 @@ private fun RextRemoteApp() {
     val discovery = remember { AdbDiscovery(context) }
     val hid = remember { BluetoothHidRemote(context) }
     val hidState by hid.stateFlow.collectAsState()
+    val miLink = remember { MiLinkRemote() }
+    val miLinkConnected by miLink.stateFlow.collectAsState()
     val pager = rememberPagerState(initialPage = 1, pageCount = { 3 })
 
     var endpoints by remember { mutableStateOf<List<AdbEndpoint>>(emptyList()) }
@@ -156,6 +159,7 @@ private fun RextRemoteApp() {
             discovery.close()
             adb.close()
             hid.disconnect()
+            miLink.close()
         }
     }
 
@@ -167,7 +171,8 @@ private fun RextRemoteApp() {
                 .sortedWith(compareBy<AdbEndpoint> { it.host }.thenBy { it.kind.ordinal })
         }
         val classic = runCatching { discovery.scanClassicAdb() }.getOrDefault(emptyList())
-        endpoints = (endpoints + classic)
+        val miLinkDevices = runCatching { discovery.scanMiLink() }.getOrDefault(emptyList())
+        endpoints = (endpoints + classic + miLinkDevices)
             .distinctBy { it.key }
             .sortedWith(compareBy<AdbEndpoint> { it.host }.thenBy { it.kind.ordinal })
         scanning = false
@@ -189,7 +194,7 @@ private fun RextRemoteApp() {
                 pager.animateScrollToPage(1)
             }
             HidConnectionState.WAITING_FOR_TV -> connectionStatus =
-                "Открой Bluetooth на телевизоре и выбери REXT Remote"
+                "Открой Bluetooth на телевизоре и выбери Universal Remote Control"
             HidConnectionState.ERROR -> connectionStatus = "Bluetooth HID недоступен. Проверь сопряжение и разрешения."
             else -> Unit
         }
@@ -234,6 +239,29 @@ private fun RextRemoteApp() {
     fun connectEndpoint(endpoint: AdbEndpoint, method: ConnectionMethod) {
         selectedEndpoint = endpoint
         pendingMethod = method
+        if (endpoint.kind == AdbEndpointKind.MI_LINK) {
+            scope.launch {
+                connecting = true
+                connectionStatus = "Подключаюсь к Xiaomi TV через MiLink…"
+                try {
+                    miLink.connect(endpoint.host, endpoint.port)
+                    tvIdentity = null
+                    tvDisplayName = endpoint.model?.takeIf { it.isNotBlank() }
+                        ?: endpoint.name.ifBlank { "Xiaomi Mi TV" }
+                    activeMethod = method
+                    pendingMethod = null
+                    connectionStatus = "Подключено: $tvDisplayName"
+                    pager.animateScrollToPage(1)
+                } catch (error: Throwable) {
+                    connectionStatus = error.message?.take(140)
+                        ?: "MiLink недоступен. Проверь, что телевизор в той же сети."
+                    miLink.disconnect()
+                } finally {
+                    connecting = false
+                }
+            }
+            return
+        }
         if (endpoint.kind == AdbEndpointKind.TLS_PAIRING) {
             pairTarget = endpoint
             pairingCode = ""
@@ -266,7 +294,11 @@ private fun RextRemoteApp() {
         showConnectSheet = false
         pendingMethod = method
         when (method) {
-            ConnectionMethod.BLUETOOTH -> startBluetooth()
+            ConnectionMethod.BLUETOOTH -> {
+                pendingMethod = null
+                connectionStatus = "Телефон готов как Bluetooth HID-пульт. На телевизоре открой Bluetooth → Добавить устройство → выбери Universal Remote Control."
+                startBluetooth()
+            }
             ConnectionMethod.HOTSPOT, ConnectionMethod.WIFI -> {
                 connectionStatus = if (method == ConnectionMethod.HOTSPOT) {
                     "Включи точку доступа. Телевизор должен сам подключиться к сохранённой сети."
@@ -300,6 +332,8 @@ private fun RextRemoteApp() {
                     else if (keyCode == 82) hid.sendConsumerUsage(0x0040)
                 } else if (adb.isConnected()) {
                     adb.sendKey(keyCode)
+                } else if (miLink.isConnected()) {
+                    miLink.sendKey(keyCode)
                 } else {
                     connectionStatus = "Сначала подключи телевизор"
                 }
@@ -316,7 +350,7 @@ private fun RextRemoteApp() {
         }
     }
 
-    val connected = adb.isConnected() || hidState == HidConnectionState.CONNECTED
+    val connected = adb.isConnected() || hidState == HidConnectionState.CONNECTED || miLinkConnected
     val displayedDevice = tvIdentity?.title ?: tvDisplayName.ifBlank { "Телевизор не подключён" }
     val currentPage = pager.currentPage
 
@@ -330,6 +364,7 @@ private fun RextRemoteApp() {
                 0 -> MousePage(
                     connected = connected,
                     bluetooth = hidState == HidConnectionState.CONNECTED,
+                    connectionMethod = activeMethod,
                     onBluetoothMove = { dx, dy ->
                         scope.launch { runCatching { hid.moveMouse(dx * 1.7f, dy * 1.7f) } }
                     },
@@ -343,10 +378,29 @@ private fun RextRemoteApp() {
                         scope.launch { runCatching { hid.click(MouseButton.LEFT) } }
                     },
                     onAdbTap = { x, y ->
-                        scope.launch { runCatching { adb.tapFraction(x, y) } }
+                        scope.launch {
+                            when {
+                                adb.isConnected() -> runCatching { adb.tapFraction(x, y) }
+                                miLink.isConnected() -> runCatching { miLink.sendKey(23) }
+                            }
+                        }
                     },
                     onAdbSwipe = { x1, y1, x2, y2, duration ->
-                        scope.launch { runCatching { adb.swipeFraction(x1, y1, x2, y2, duration) } }
+                        scope.launch {
+                            when {
+                                adb.isConnected() -> runCatching { adb.swipeFraction(x1, y1, x2, y2, duration) }
+                                miLink.isConnected() -> {
+                                    val dx = x2 - x1
+                                    val dy = y2 - y1
+                                    val keyCode = if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                                        if (dx > 0.035f) 22 else if (dx < -0.035f) 21 else null
+                                    } else {
+                                        if (dy > 0.035f) 20 else if (dy < -0.035f) 19 else null
+                                    }
+                                    if (keyCode != null) runCatching { miLink.sendKey(keyCode) }
+                                }
+                            }
+                        }
                     },
                     onRightClick = {
                         scope.launch {
@@ -365,7 +419,7 @@ private fun RextRemoteApp() {
                     onApp = ::launchTvApp,
                     onAddApps = {
                         if (adb.isConnected()) showAppsSheet = true
-                        else connectionStatus = "Список приложений телевизора доступен после ADB-подключения"
+                        else connectionStatus = "Список и запуск приложений доступны при ADB-подключении. MiLink управляет кнопками пульта."
                     }
                 )
                 else -> DevicesPage(
@@ -374,6 +428,7 @@ private fun RextRemoteApp() {
                     connectionMethod = activeMethod,
                     endpoints = endpoints,
                     selected = selectedEndpoint,
+                    pendingMethod = pendingMethod,
                     scanning = scanning,
                     connecting = connecting,
                     status = connectionStatus,
@@ -382,11 +437,17 @@ private fun RextRemoteApp() {
                     onManualIp = { showManualIpSheet = true },
                     onSelectEndpoint = { endpoint ->
                         selectedEndpoint = endpoint
-                        pendingMethod?.let { connectEndpoint(endpoint, it) }
+                        when (pendingMethod) {
+                            ConnectionMethod.BLUETOOTH -> connectionStatus =
+                                "Bluetooth HID: открой Bluetooth-настройки телевизора и выбери Universal Remote Control."
+                            null -> Unit
+                            else -> connectEndpoint(endpoint, pendingMethod!!)
+                        }
                     },
                     onForget = {
                         adb.disconnect()
                         hid.disconnect()
+                        miLink.disconnect()
                         tvIdentity = null
                         tvDisplayName = ""
                         activeMethod = null
@@ -467,7 +528,7 @@ private fun beginBluetoothPairing(
     scope.launch {
         val ready = runCatching { hid.registerForTvPairing() }.getOrDefault(false)
         if (ready) {
-            onStatus("На телевизоре открой Bluetooth → Добавить устройство → REXT Remote")
+            onStatus("На телевизоре открой Bluetooth → Добавить устройство → Universal Remote Control")
             runCatching {
                 context.startActivity(
                     Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
@@ -490,6 +551,7 @@ private fun DevicesPage(
     connectionMethod: ConnectionMethod?,
     endpoints: List<AdbEndpoint>,
     selected: AdbEndpoint?,
+    pendingMethod: ConnectionMethod?,
     scanning: Boolean,
     connecting: Boolean,
     status: String,
@@ -518,7 +580,7 @@ private fun DevicesPage(
             }
         }
         Spacer(Modifier.height(22.dp))
-        NavIndicators(active = 0, atTop = true)
+        NavIndicators(active = 0, atTop = true, connectionMethod = connectionMethod)
         Spacer(Modifier.height(26.dp))
 
         if (connected) {
@@ -564,6 +626,8 @@ private fun DevicesPage(
                     AdbEndpointKind.TCP -> endpoint.name.ifBlank { "Android TV / ADB" }
                     AdbEndpointKind.TLS_CONNECT -> "Wireless debugging"
                     AdbEndpointKind.TLS_PAIRING -> "ADB pairing"
+                    AdbEndpointKind.MI_LINK -> endpoint.model?.takeIf { it.isNotBlank() }
+                        ?: endpoint.name.ifBlank { "Xiaomi TV (MiLink)" }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth()
@@ -584,6 +648,7 @@ private fun DevicesPage(
                             AdbEndpointKind.TCP -> "ADB"
                             AdbEndpointKind.TLS_CONNECT -> "TLS"
                             AdbEndpointKind.TLS_PAIRING -> "PAIR"
+                            AdbEndpointKind.MI_LINK -> "MILINK"
                         },
                         9.sp,
                         if (isSelected) Paper else Dim,
@@ -620,7 +685,9 @@ private fun DevicesPage(
         }
 
         Spacer(Modifier.height(14.dp))
-        if (selected != null && pendingMethod != null && !connected) {
+        if (selected != null && pendingMethod != null &&
+            pendingMethod != ConnectionMethod.BLUETOOTH && !connected
+        ) {
             OutlineButton(
                 if (connecting) "Connecting…" else "Connect to selected TV",
                 onClick = { onSelectEndpoint(selected) },
@@ -657,7 +724,7 @@ private fun RemotePage(
                 Spacer(Modifier.width(8.dp))
             }
             UiText(
-                if (connected) deviceName.uppercase(Locale.ROOT) else "REXT REMOTE",
+                if (connected) deviceName.uppercase(Locale.ROOT) else "UNIVERSAL REMOTE",
                 10.sp,
                 Dim,
                 FontWeight.SemiBold,
@@ -692,7 +759,7 @@ private fun RemotePage(
             OutlineIconButton(Glyph.PLUS, onAddApps, 42.dp)
         }
         Spacer(Modifier.height(14.dp))
-        NavIndicators(active = 1, atTop = false)
+        NavIndicators(active = 1, atTop = false, connectionMethod = connectionMethod)
     }
 }
 
@@ -704,11 +771,11 @@ private fun DPad(onKey: (Int) -> Unit) {
     ) {
         Canvas(
             Modifier.fillMaxSize().pointerInput(Unit) {
-                androidx.compose.foundation.gestures.detectTapGestures { point ->
+                detectTapGestures(onTap = { point: Offset ->
                     val center = Offset(size.width / 2f, size.height / 2f)
                     val dx = point.x - center.x
                     val dy = point.y - center.y
-                    val radius = size.minDimension * 0.245f
+                    val radius = minOf(size.width, size.height).toFloat() * 0.245f
                     if (kotlin.math.sqrt(dx * dx + dy * dy) < radius * 0.82f) {
                         onKey(23)
                     } else if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
@@ -716,7 +783,7 @@ private fun DPad(onKey: (Int) -> Unit) {
                     } else {
                         onKey(if (dy > 0) 20 else 19)
                     }
-                }
+                })
             }
         ) {
             val side = size.minDimension
@@ -752,12 +819,13 @@ private fun DPad(onKey: (Int) -> Unit) {
 private fun MousePage(
     connected: Boolean,
     bluetooth: Boolean,
-    onBluetoothMove: suspend (Float, Float) -> Unit,
-    onBluetoothHoldStart: suspend () -> Unit,
-    onBluetoothHoldEnd: suspend () -> Unit,
-    onBluetoothTap: suspend () -> Unit,
-    onAdbTap: suspend (Float, Float) -> Unit,
-    onAdbSwipe: suspend (Float, Float, Float, Float, Int) -> Unit,
+    connectionMethod: ConnectionMethod?,
+    onBluetoothMove: (Float, Float) -> Unit,
+    onBluetoothHoldStart: () -> Unit,
+    onBluetoothHoldEnd: () -> Unit,
+    onBluetoothTap: () -> Unit,
+    onAdbTap: (Float, Float) -> Unit,
+    onAdbSwipe: (Float, Float, Float, Float, Int) -> Unit,
     onRightClick: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -768,7 +836,7 @@ private fun MousePage(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            NavIndicators(active = 2, atTop = true)
+            NavIndicators(active = 2, atTop = true, connectionMethod = connectionMethod)
             Spacer(Modifier.height(12.dp))
             UiText(
                 if (bluetooth) "BLUETOOTH POINTER" else if (connected) "TOUCH CONTROL" else "MOUSE",
@@ -808,12 +876,12 @@ private fun MousePage(
 private fun MouseTouchSurface(
     modifier: Modifier,
     bluetooth: Boolean,
-    onBluetoothMove: suspend (Float, Float) -> Unit,
-    onBluetoothHoldStart: suspend () -> Unit,
-    onBluetoothHoldEnd: suspend () -> Unit,
-    onBluetoothTap: suspend () -> Unit,
-    onAdbTap: suspend (Float, Float) -> Unit,
-    onAdbSwipe: suspend (Float, Float, Float, Float, Int) -> Unit
+    onBluetoothMove: (Float, Float) -> Unit,
+    onBluetoothHoldStart: () -> Unit,
+    onBluetoothHoldEnd: () -> Unit,
+    onBluetoothTap: () -> Unit,
+    onAdbTap: (Float, Float) -> Unit,
+    onAdbSwipe: (Float, Float, Float, Float, Int) -> Unit
 ) {
     Box(
         modifier = modifier
@@ -831,32 +899,22 @@ private fun MouseTouchSurface(
                     var held = false
                     var pressed = true
 
-                    val firstEvent = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                        awaitPointerEvent()
-                    }
-                    if (firstEvent == null) {
-                        held = true
-                        if (bluetooth) onBluetoothHoldStart()
-                    } else {
-                        val change = firstEvent.changes.first()
-                        val delta = change.position - previous
-                        if (delta.getDistance() > viewConfiguration.touchSlop) {
-                            moved = true
-                            if (bluetooth) onBluetoothMove(delta.x, delta.y)
-                        }
-                        last = change.position
-                        previous = change.position
-                        pressed = change.pressed
-                    }
-
                     while (pressed) {
                         val event: PointerEvent = awaitPointerEvent()
-                        val change = event.changes.first()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         val delta = change.position - previous
-                        if (change.pressed && delta.getDistance() > 0.5f) {
+                        if (change.pressed && delta.getDistance() > viewConfiguration.touchSlop) {
                             moved = true
+                        }
+                        if (change.pressed && moved && delta.getDistance() > 0.5f) {
                             if (bluetooth) onBluetoothMove(delta.x, delta.y)
                             change.consume()
+                        }
+                        if (!held && !moved &&
+                            event.uptimeMillis - down.uptimeMillis >= viewConfiguration.longPressTimeoutMillis
+                        ) {
+                            held = true
+                            if (bluetooth) onBluetoothHoldStart()
                         }
                         last = change.position
                         previous = change.position
@@ -1070,14 +1128,14 @@ private fun MouseActionButton(icon: Glyph, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NavIndicators(active: Int, atTop: Boolean) {
+private fun NavIndicators(active: Int, atTop: Boolean, connectionMethod: ConnectionMethod?) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 58.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        NavIndicator(0, active, Glyph.BLUETOOTH)
-        NavIndicator(1, active, Glyph.HOME)
+        NavIndicator(0, active, connectionMethod?.let(::connectionGlyph) ?: Glyph.TV)
+        NavIndicator(1, active, Glyph.REMOTE)
         NavIndicator(2, active, Glyph.MOUSE)
     }
 }
@@ -1127,10 +1185,16 @@ private fun OutlineIcon(glyph: Glyph, size: androidx.compose.ui.unit.Dp, color: 
         val w = this.size.width
         val h = this.size.height
         val stroke = (w.coerceAtMost(h) * 0.075f).coerceAtLeast(1.5.dp.toPx())
-        fun line(vararg points: Offset, width: Float = stroke) {
-            if (points.size < 2) return
+        fun line(
+            first: Offset,
+            second: Offset,
+            third: Offset? = null,
+            fourth: Offset? = null,
+            width: Float = stroke
+        ) {
+            val points = listOfNotNull(first, second, third, fourth)
             val path = Path().apply {
-                moveTo(points[0].x, points[0].y)
+                moveTo(points.first().x, points.first().y)
                 points.drop(1).forEach { lineTo(it.x, it.y) }
             }
             drawPath(path, color, style = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round))
@@ -1159,7 +1223,14 @@ private fun OutlineIcon(glyph: Glyph, size: androidx.compose.ui.unit.Dp, color: 
                 drawArc(color, 225f, 90f, false, Offset(w * .25f, h * .34f), Size(w * .5f, h * .48f), style = Stroke(stroke, cap = StrokeCap.Round))
                 drawCircle(color, stroke * .55f, Offset(w * .5f, h * .83f))
             }
-            Glyph.REMOTE, Glyph.TV -> {
+            Glyph.REMOTE -> {
+                roundRect(w * .31f, h * .06f, w * .38f, h * .88f, w * .16f)
+                drawCircle(color, w * .045f, Offset(w * .5f, h * .23f), style = Stroke(stroke * .8f))
+                line(Offset(w * .42f, h * .52f), Offset(w * .58f, h * .52f))
+                line(Offset(w * .42f, h * .65f), Offset(w * .58f, h * .65f))
+                line(Offset(w * .42f, h * .78f), Offset(w * .58f, h * .78f))
+            }
+            Glyph.TV -> {
                 roundRect(w * .09f, h * .13f, w * .82f, h * .65f, w * .09f)
                 line(Offset(w * .37f, h * .81f), Offset(w * .63f, h * .81f))
                 line(Offset(w * .5f, h * .78f), Offset(w * .5f, h * .9f))
@@ -1229,7 +1300,7 @@ private fun OutlineIcon(glyph: Glyph, size: androidx.compose.ui.unit.Dp, color: 
 @Composable
 private fun BrandMark() {
     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        UiText("REXT", 20.sp, Paper, FontWeight.Light, letterSpacing = 4.sp)
+        UiText("UNIVERSAL", 20.sp, Paper, FontWeight.Light, letterSpacing = 4.sp)
         UiText("REMOTE", 8.sp, Dim, FontWeight.Medium, letterSpacing = 3.sp)
     }
 }

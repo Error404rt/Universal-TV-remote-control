@@ -3,6 +3,8 @@ package com.rext.remote.connection
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
+import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -19,13 +21,14 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-enum class AdbEndpointKind { TCP, TLS_CONNECT, TLS_PAIRING }
+enum class AdbEndpointKind { TCP, TLS_CONNECT, TLS_PAIRING, MI_LINK }
 
 data class AdbEndpoint(
     val name: String,
     val host: String,
     val port: Int,
-    val kind: AdbEndpointKind
+    val kind: AdbEndpointKind,
+    val model: String? = null
 ) {
     val key: String get() = "$host:$port:$kind"
     val isPairingEndpoint: Boolean get() = kind == AdbEndpointKind.TLS_PAIRING
@@ -38,7 +41,10 @@ data class AdbEndpoint(
  * Wireless debugging. This avoids a separate mDNS runtime dependency.
  */
 class AdbDiscovery(context: Context) : AutoCloseable {
-    private val manager = context.applicationContext.getSystemService(NsdManager::class.java)
+    private val appContext = context.applicationContext
+    private val manager = appContext.getSystemService(NsdManager::class.java)
+    private val wifiManager = appContext.getSystemService(WifiManager::class.java)
+    private var multicastLock: WifiManager.MulticastLock? = null
     private val seen = ConcurrentHashMap<String, AdbEndpoint>()
     private val generation = AtomicInteger(0)
     private val listeners = mutableMapOf<String, NsdManager.DiscoveryListener>()
@@ -51,6 +57,12 @@ class AdbDiscovery(context: Context) : AutoCloseable {
     fun start(scope: CoroutineScope, onEndpoint: (AdbEndpoint) -> Unit) {
         stop()
         callback = onEndpoint
+        runCatching {
+            multicastLock = wifiManager?.createMulticastLock("universal_remote_discovery")?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
         val currentGeneration = generation.get()
         SERVICE_TYPES.forEach { (serviceType, kind) ->
             val listener = object : NsdManager.DiscoveryListener {
@@ -71,13 +83,26 @@ class AdbDiscovery(context: Context) : AutoCloseable {
 
                             override fun onServiceResolved(info: NsdServiceInfo) {
                                 if (generation.get() != currentGeneration) return
-                                val host = info.host?.hostAddress ?: return
+                                @Suppress("DEPRECATION")
+                                val host = if (Build.VERSION.SDK_INT >= 34) {
+                                    info.hostAddresses.filterIsInstance<Inet4Address>().firstOrNull()?.hostAddress
+                                } else {
+                                    info.host?.hostAddress
+                                } ?: return
                                 if (!isPrivateIpv4(host) || info.port !in 1..65535) return
+                                val attributes = runCatching { info.attributes }.getOrNull()
+                                val model = attributes?.get("md")?.toString(Charsets.UTF_8).orEmpty()
+                                val friendlyName = attributes?.get("fn")?.toString(Charsets.UTF_8)
+                                    ?.takeIf { it.isNotBlank() }
+                                if (kind == AdbEndpointKind.MI_LINK &&
+                                    !isXiaomiModel(model, info.serviceName.orEmpty())
+                                ) return
                                 val endpoint = AdbEndpoint(
-                                    name = info.serviceName?.take(96).orEmpty().ifBlank { "ADB device" },
+                                    name = friendlyName ?: info.serviceName?.take(96).orEmpty().ifBlank { "TV device" },
                                     host = host,
-                                    port = info.port,
-                                    kind = kind
+                                    port = if (kind == AdbEndpointKind.MI_LINK) MILINK_PORT else info.port,
+                                    kind = kind,
+                                    model = model.takeIf { it.isNotBlank() }
                                 )
                                 if (seen.putIfAbsent(endpoint.key, endpoint) == null) {
                                     callback?.invoke(endpoint)
@@ -129,7 +154,21 @@ class AdbDiscovery(context: Context) : AutoCloseable {
         val semaphore = Semaphore(MAX_CONCURRENT_PROBES)
         hosts.map { host ->
             async(Dispatchers.IO) {
-                semaphore.withPermit { probe(host, port, connectTimeoutMs) }
+                semaphore.withPermit { probe(host, port, connectTimeoutMs, AdbEndpointKind.TCP, "ADB device") }
+            }
+        }.awaitAll().filterNotNull().distinctBy { it.key }
+    }
+
+    /** Bounded fallback scan for Xiaomi MiLink local TCP service on port 6091. */
+    suspend fun scanMiLink(connectTimeoutMs: Int = 280): List<AdbEndpoint> = withContext(Dispatchers.IO) {
+        require(connectTimeoutMs in 100..5000)
+        val hosts = enumeratePrivateHosts().take(MAX_TOTAL_HOSTS)
+        val semaphore = Semaphore(MAX_CONCURRENT_PROBES)
+        hosts.map { host ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    probe(host, MILINK_PORT, connectTimeoutMs, AdbEndpointKind.MI_LINK, "Xiaomi TV (MiLink)")
+                }
             }
         }.awaitAll().filterNotNull().distinctBy { it.key }
     }
@@ -150,6 +189,8 @@ class AdbDiscovery(context: Context) : AutoCloseable {
         started.clear()
         callback = null
         seen.clear()
+        runCatching { multicastLock?.release() }
+        multicastLock = null
     }
 
     override fun close() = stop()
@@ -184,13 +225,25 @@ class AdbDiscovery(context: Context) : AutoCloseable {
         return output.toList()
     }
 
-    private fun probe(host: String, port: Int, timeoutMs: Int): AdbEndpoint? = runCatching {
+    private fun probe(
+        host: String,
+        port: Int,
+        timeoutMs: Int,
+        kind: AdbEndpointKind,
+        name: String
+    ): AdbEndpoint? = runCatching {
         Socket().use { socket ->
             socket.tcpNoDelay = true
             socket.connect(InetSocketAddress(host, port), timeoutMs)
         }
-        AdbEndpoint("ADB device", host, port, AdbEndpointKind.TCP)
+        AdbEndpoint(name, host, port, kind)
     }.getOrNull()
+
+    private fun isXiaomiModel(model: String, serviceName: String): Boolean =
+        listOf(model, serviceName).any { value ->
+            val normalized = value.trim().lowercase()
+            normalized.startsWith("mitv") || normalized.startsWith("mibox")
+        }
 
     private fun isPrivateIpv4(value: String): Boolean = runCatching {
         val parts = value.split('.').map(String::toInt)
@@ -212,11 +265,13 @@ class AdbDiscovery(context: Context) : AutoCloseable {
         private const val MAX_HOSTS_PER_SUBNET = 510L
         private const val MAX_TOTAL_HOSTS = 1024
         private const val MAX_CONCURRENT_PROBES = 24
+        private const val MILINK_PORT = 6091
 
         private val SERVICE_TYPES = listOf(
             "_adb._tcp." to AdbEndpointKind.TCP,
             "_adb-tls-connect._tcp." to AdbEndpointKind.TLS_CONNECT,
-            "_adb-tls-pairing._tcp." to AdbEndpointKind.TLS_PAIRING
+            "_adb-tls-pairing._tcp." to AdbEndpointKind.TLS_PAIRING,
+            "_googlecast._tcp." to AdbEndpointKind.MI_LINK
         )
     }
 }
