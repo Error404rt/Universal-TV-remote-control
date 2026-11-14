@@ -16,7 +16,7 @@ Jetpack Compose Foundation + Canvas are used for layout, gestures and drawing, b
 - Devices: discovered TV/ADB endpoints, Connect at the upper right, method chooser and connection status.
 - Remote: outlined circular D-pad, OK, Menu, Back, Home and quick-launch app shortcuts with a plus control.
 - Mouse: square rounded-outline touch surface and compact secondary controls.
-- The three nav icons move to the top on Devices and Mouse, and remain under the remote buttons/shortcuts on Remote.
+- The three nav indicators stay at the bottom on all screens.
 - The selected section is shown as a small dot; the two inactive sections show their outline icons.
 
 ## Domain
@@ -32,13 +32,13 @@ Core models:
 ## Discovery
 
 Use protocol-specific discovery:
-- Android NsdManager mDNS: _adb._tcp, _adb-tls-connect._tcp, _adb-tls-pairing._tcp.
+- Android NsdManager mDNS: _adb._tcp, _adb-tls-connect._tcp, _adb-tls-pairing._tcp, _androidtvremote2._tcp and Xiaomi _googlecast._tcp.
 - Bounded local IPv4 subnet probe for classic ADB TCP port 5555 when ADB mDNS is missing.
-- Android TV Remote v2: _androidtvremote2._tcp discovery and its own pairing flow (separate provider, future stage).
+- Android TV Remote v2: _androidtvremote2._tcp discovery, bounded TCP 6466 fallback, six-character pairing over TLS 6467 and pinned TLS control on 6466.
 - Samsung / LG / Roku: platform-specific local discovery (future providers).
 - Bluetooth HID: phone advertises a HID input device; the TV initiates accessory discovery and pairing.
 
-A found TCP port is only a candidate. REXT checks an ADB shell handshake before marking the TV connected.
+A discovered TCP port is only a candidate. ADB requires a shell handshake; Android TV Remote v2 requires successful TLS pairing/control state; MiLink requires an open MiLink socket.
 
 ## Connection providers
 
@@ -53,7 +53,7 @@ Providers own protocol-specific pairing, transport, retries, timeouts and capabi
 
 ### ADB provider
 
-The current implementation uses Kadb (Apache-2.0) for classic TCP ADB and Android 11+ wireless pairing/connect endpoints. The ADB host key is persisted encrypted with AES-GCM using Android Keystore. ADB authorization remains user-controlled by the TV's own RSA/wireless-debugging confirmation.
+The current implementation uses Kadb 1.3.0 (Apache-2.0) for classic TCP ADB and Android 11+ wireless pairing/connect endpoints. The ADB host key is persisted encrypted with AES-GCM using Android Keystore. ADB authorization remains user-controlled by the TV's own RSA/wireless-debugging confirmation.
 
 Supported commands in the current provider:
 - Android key events for D-pad, OK, Back, Home and Menu.
@@ -110,3 +110,13 @@ A catalog entry is a candidate until a physical model has been tested. A model b
 - Key events use big-endian frames and TV-local timestamps (downTime / eventTime set to zero).
 - MiLink provides key navigation only. It does not provide a standard system pointer or installed-app inventory.
 - MiTV-MSSP0 / amelie remains a priority candidate until tested on the actual hardware and firmware.
+
+
+## Android TV Remote v2 provider
+
+- Discovery uses DNS-SD `_androidtvremote2._tcp`; a bounded local subnet scan checks TCP 6466 when mDNS is unavailable.
+- The user opens the TV's pairing UI and enters its six-character code in the app.
+- Pairing uses TLS 1.2 on TCP 6467. After pairing, the TV certificate fingerprint is pinned per host.
+- The remote-control connection uses TLS 1.2 on TCP 6466 and rejects a changed certificate until the device is paired again.
+- The provider currently sends Android key events. It does not implement a standard system pointer or installed-app inventory.
+- Phone hotspot and shared Wi-Fi select the network path; the advertised TV service selects the remote protocol.

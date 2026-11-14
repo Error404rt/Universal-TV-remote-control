@@ -20,7 +20,7 @@ No brand below is marked Verified yet.
 
 ## Android TV / Google TV families
 
-Primary protocol candidate: Android TV Remote v2 over local network (mDNS discovery, on-screen pairing, TLS/protobuf control). ADB is an optional diagnostic/advanced path, not the default control protocol.
+Implemented network provider: Android TV Remote v2 over local network (mDNS discovery, six-character on-screen pairing, TLS/protobuf control). MiLink is an additional Xiaomi-specific provider. ADB is an optional advanced path. Exact model and firmware support remains unverified until physically tested.
 
 | Brand / family | Candidate models / product lines | Status | Notes |
 |---|---|---|---|
@@ -88,7 +88,7 @@ For every physical test, record:
 
 ## First test target
 
-Xiaomi Mi TV 4A is the priority device. Do not mark it Verified until the exact variant and firmware are tested. Android TV Remote v2 is a strong first network-protocol candidate; Bluetooth HID should be tested independently as a separate connection method.
+Xiaomi Mi TV 4A is the priority device. Do not mark it Verified until the exact variant and firmware are tested. Android TV Remote v2 is implemented as a network provider; Bluetooth HID remains an independent connection method. Neither makes an untested model Verified.
 
 
 ## Provider implementation status
@@ -98,6 +98,6 @@ Xiaomi Mi TV 4A is the priority device. Do not mark it Verified until the exact 
 | Xiaomi MiLink | Discovery, TCP 6091, D-pad, OK, Back, Home and Menu | No system mouse pointer or app inventory through this provider. Exact MiTV-MSSP0 test pending. |
 | ADB TCP / Wireless debugging | Keys, tap/swipe, Leanback app discovery and launch | Requires network ADB and TV-side authorization. Android 9 firmware may require a separate network-ADB option. |
 | Bluetooth HID | Phone as keyboard and relative mouse | TV must act as HID host and pair from its own Bluetooth accessory menu. |
-| Android TV Remote v2 | Candidate next provider | Not yet implemented in this app. |
+| Android TV Remote v2 | mDNS discovery, six-character pairing over TLS 6467 and control over TLS 6466 | Implemented in the app. Exact model/firmware testing is still required. No standard pointer or installed-app inventory through this provider. |
 | Samsung Tizen / LG webOS / Roku / VIDAA | Candidate platforms | Separate protocol providers and model-level tests required. |
 

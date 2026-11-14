@@ -18,9 +18,12 @@ A local-first Android TV remote with a pure-black interface and custom white out
 
 ## Implemented local providers
 
+- **Android TV Remote v2**: discovers `_androidtvremote2._tcp`, pairs with the six-character code shown on the TV over TLS port 6467, then controls the TV over TLS port 6466. USB debugging is not required.
 - **Xiaomi MiLink**: discovers Xiaomi Mi TV / Mi Box devices advertising a Xiaomi model TXT record under _googlecast._tcp and connects to MiLink on TCP 6091. No ADB or USB debugging is required for this provider.
 - **ADB TCP / Android Wireless debugging**: optional advanced provider for Android-based TVs that expose ADB and accept the TV-side authorization prompt or pairing code.
 - **Bluetooth HID**: phone-as-keyboard/mouse provider for televisions that support HID host input.
+
+Android TV Remote v2 currently sends remote key events, but does not expose installed-app inventory or a standard system mouse pointer. The installed Leanback app list and app launching currently require ADB. MiLink supports key navigation only. Bluetooth HID is the true pointer path.
 
 MiLink sends real Android key events including D-pad, OK, Back, Home and Menu. It does not expose a standard system mouse pointer or installed-app list; touchpad movement in a MiLink session is translated into D-pad navigation. Bluetooth HID is the current true mouse-pointer path. ADB tap/swipe is a touch-input fallback.
 
@@ -36,7 +39,7 @@ MiLink discovery and the port-6091 provider are included for this model family, 
 
 ## Compatibility policy
 
-A brand in the catalogue is a candidate, not a guarantee. Android TV / Google TV sets can expose different remote services depending on model and firmware. Samsung Tizen, LG webOS, Roku and VIDAA require their own providers and are not implemented in this build. See docs/compatibility-matrix.md.
+A brand in the catalogue is a candidate, not a guarantee. Android TV / Google TV sets can expose Android TV Remote v2, ADB or another service depending on model and firmware. Samsung Tizen, LG webOS, Roku and VIDAA require their own providers and are not implemented in this build. See docs/compatibility-matrix.md.
 
 ## Build
 
