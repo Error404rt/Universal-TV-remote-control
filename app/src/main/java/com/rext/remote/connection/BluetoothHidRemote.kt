@@ -143,6 +143,18 @@ class BluetoothHidRemote(context: Context) {
         }.getOrDefault(false)
     }
 
+    suspend fun sendConsumerUsage(usage: Int): Boolean = withContext(Dispatchers.Main.immediate) {
+        require(usage in 0..0x03ff)
+        val device = connectedHost ?: return@withContext false
+        val proxy = hid ?: return@withContext false
+        val press = byteArrayOf((usage and 0xff).toByte(), ((usage shr 8) and 0xff).toByte())
+        val release = byteArrayOf(0, 0)
+        runCatching {
+            proxy.sendReport(device, HidReports.CONSUMER_REPORT_ID, press) &&
+                proxy.sendReport(device, HidReports.CONSUMER_REPORT_ID, release)
+        }.getOrDefault(false)
+    }
+
     suspend fun moveMouse(dx: Float, dy: Float, wheel: Float = 0f): Boolean =
         withContext(Dispatchers.Main.immediate) {
             val device = connectedHost ?: return@withContext false
@@ -201,8 +213,9 @@ enum class MouseButton(val mask: Int) {
 private object HidReports {
     const val KEYBOARD_REPORT_ID = 1
     const val MOUSE_REPORT_ID = 2
+    const val CONSUMER_REPORT_ID = 3
 
-    // Report 1: modifier, reserved, six keyboard usages. Report 2: buttons + X/Y/wheel.
+    // Report 1: keyboard. Report 2: relative mouse. Report 3: consumer-control usages.
     val DESCRIPTOR = byteArrayOf(
         0x05, 0x01, 0x09, 0x06, 0xA1.toByte(), 0x01, 0x85.toByte(), 0x01,
         0x05, 0x07, 0x19, 0xE0.toByte(), 0x29, 0xE7.toByte(), 0x15, 0x00,
@@ -218,7 +231,10 @@ private object HidReports {
         0x95.toByte(), 0x01, 0x75, 0x05, 0x81.toByte(), 0x01,
         0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38,
         0x15, 0x81.toByte(), 0x25, 0x7F, 0x75, 0x08, 0x95.toByte(), 0x03,
-        0x81.toByte(), 0x06, 0xC0.toByte(), 0xC0.toByte()
+        0x81.toByte(), 0x06, 0xC0.toByte(), 0xC0.toByte(),
+        0x05, 0x0C, 0x09, 0x01, 0xA1.toByte(), 0x01, 0x85.toByte(), 0x03,
+        0x15, 0x00, 0x26, 0xFF.toByte(), 0x03, 0x19, 0x00, 0x2A, 0xFF.toByte(), 0x03,
+        0x75, 0x10, 0x95.toByte(), 0x01, 0x81.toByte(), 0x00, 0xC0.toByte()
     )
 
     fun mouse(dx: Float, dy: Float, wheel: Float, buttons: Int): ByteArray {
