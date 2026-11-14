@@ -12,6 +12,8 @@ import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executor
 
 enum class HidConnectionState { UNAVAILABLE, REGISTERING, WAITING_FOR_TV, CONNECTED, ERROR }
@@ -28,10 +30,15 @@ class BluetoothHidRemote(context: Context) {
     private val adapter = appContext.getSystemService(BluetoothManager::class.java)?.adapter
     private val mainExecutor: Executor = appContext.mainExecutor
 
-    @Volatile var state: HidConnectionState = HidConnectionState.UNAVAILABLE
-        private set
+    private val mutableState = MutableStateFlow(HidConnectionState.UNAVAILABLE)
+    val stateFlow = mutableState.asStateFlow()
+    val state: HidConnectionState get() = mutableState.value
     @Volatile var connectedHost: BluetoothDevice? = null
         private set
+
+    private fun updateState(value: HidConnectionState) {
+        mutableState.value = value
+    }
 
     private var hid: BluetoothHidDevice? = null
     private var registered = false
@@ -45,7 +52,7 @@ class BluetoothHidRemote(context: Context) {
                 registrationWaiter?.complete(true)
             } else {
                 connectedHost = null
-                state = HidConnectionState.ERROR
+                updateState(HidConnectionState.ERROR)
                 registrationWaiter?.complete(false)
             }
         }
