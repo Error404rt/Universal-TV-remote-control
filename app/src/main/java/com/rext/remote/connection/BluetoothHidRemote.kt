@@ -98,9 +98,9 @@ class BluetoothHidRemote(context: Context) {
                     }
                     hid = proxy as BluetoothHidDevice
                     val settings = BluetoothHidDeviceAppSdpSettings(
-                        "REXT Remote",
+                        "Universal Remote Control",
                         "TV remote control with mouse",
-                        "REXT Remote",
+                        "Universal Remote Control",
                         BluetoothHidDevice.SUBCLASS1_COMBO,
                         HidReports.DESCRIPTOR
                     )

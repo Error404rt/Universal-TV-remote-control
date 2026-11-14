@@ -13,8 +13,8 @@ android {
         applicationId = "com.rext.remote"
         minSdk = 28
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
 
     buildFeatures {
@@ -43,7 +43,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-text")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
-    implementation("com.flyfishxu:kadb:2.1.5")
+    implementation("com.flyfishxu:kadb:2.1.4")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "REXT Remote"
+rootProject.name = "Universal Remote Control"
 include(":app")
