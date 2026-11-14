@@ -5,7 +5,10 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.flyfishxu.kadb.cert.KadbCert
-import com.flyfishxu.kadb.cert.KadbPrivateKeyStore
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -13,43 +16,73 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Kadb host identity store. The ADB private key is encrypted with an AES-GCM key
- * held by Android Keystore; only the encrypted payload is stored in app-private prefs.
+ * Stores Kadb 1.3's certificate and private key together in one AES-GCM encrypted payload.
+ * The AES key is non-exportable and remains in Android Keystore.
  */
-class EncryptedAdbKeyStore(context: Context) : KadbPrivateKeyStore {
+class EncryptedAdbKeyStore(context: Context) {
     private val preferences = context.applicationContext
         .getSharedPreferences("rext_adb_identity", Context.MODE_PRIVATE)
 
     @Synchronized
-    override fun readPrivateKeyPem(): ByteArray? {
+    fun configure() {
+        val existing = runCatching { readIdentity() }.getOrNull()
+        if (existing != null) {
+            KadbCert.set(existing.first, existing.second)
+            return
+        }
+
+        // Kadb 1.3 creates and keeps the PEM certificate/private-key pair in KadbCert.
+        KadbCert.get()
+        val pair = KadbCert.getOrError()
+        writeIdentity(pair.first, pair.second)
+    }
+
+    private fun readIdentity(): Pair<ByteArray, ByteArray>? {
         val encoded = preferences.getString(KEY_PAYLOAD, null) ?: return null
-        val sealed = runCatching { Base64.decode(encoded, Base64.NO_WRAP) }
-            .getOrElse { throw IllegalStateException("Stored ADB identity is unreadable", it) }
-        require(sealed.size > IV_LENGTH + TAG_LENGTH_BYTES) { "Stored ADB identity is incomplete" }
+        val sealed = Base64.decode(encoded, Base64.NO_WRAP)
+        require(sealed.size > IV_LENGTH + TAG_LENGTH_BYTES) { "Encrypted ADB identity is incomplete" }
+
         val iv = sealed.copyOfRange(0, IV_LENGTH)
         val ciphertext = sealed.copyOfRange(IV_LENGTH, sealed.size)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, encryptionKey(), GCMParameterSpec(TAG_LENGTH_BITS, iv))
-        return cipher.doFinal(ciphertext)
+        val plaintext = cipher.doFinal(ciphertext)
+
+        return DataInputStream(ByteArrayInputStream(plaintext)).use { input ->
+            val certLength = input.readInt()
+            require(certLength in 1..MAX_IDENTITY_FIELD)
+            val certificate = ByteArray(certLength)
+            input.readFully(certificate)
+
+            val keyLength = input.readInt()
+            require(keyLength in 1..MAX_IDENTITY_FIELD)
+            val privateKey = ByteArray(keyLength)
+            input.readFully(privateKey)
+            require(input.available() == 0) { "Unexpected ADB identity payload data" }
+            certificate to privateKey
+        }
     }
 
-    @Synchronized
-    override fun writePrivateKeyPemAtomic(privateKeyPem: ByteArray) {
-        require(privateKeyPem.isNotEmpty()) { "ADB identity cannot be empty" }
+    private fun writeIdentity(certificate: ByteArray, privateKey: ByteArray) {
+        require(certificate.isNotEmpty() && privateKey.isNotEmpty())
+        require(certificate.size <= MAX_IDENTITY_FIELD && privateKey.size <= MAX_IDENTITY_FIELD)
+        val plaintext = ByteArrayOutputStream().also { bytes ->
+            DataOutputStream(bytes).use { output ->
+                output.writeInt(certificate.size)
+                output.write(certificate)
+                output.writeInt(privateKey.size)
+                output.write(privateKey)
+            }
+        }.toByteArray()
+
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
-        val sealed = cipher.iv + cipher.doFinal(privateKeyPem)
-        val committed = preferences.edit()
-            .putString(KEY_PAYLOAD, Base64.encodeToString(sealed, Base64.NO_WRAP))
-            .commit()
-        check(committed) { "Could not save encrypted ADB identity" }
-    }
-
-    @Synchronized
-    override fun clear() {
-        check(preferences.edit().remove(KEY_PAYLOAD).commit()) {
-            "Could not remove encrypted ADB identity"
-        }
+        val sealed = cipher.iv + cipher.doFinal(plaintext)
+        check(
+            preferences.edit()
+                .putString(KEY_PAYLOAD, Base64.encodeToString(sealed, Base64.NO_WRAP))
+                .commit()
+        ) { "Could not save encrypted ADB identity" }
     }
 
     private fun encryptionKey(): SecretKey {
@@ -79,17 +112,18 @@ class EncryptedAdbKeyStore(context: Context) : KadbPrivateKeyStore {
         private const val IV_LENGTH = 12
         private const val TAG_LENGTH_BITS = 128
         private const val TAG_LENGTH_BYTES = TAG_LENGTH_BITS / 8
+        private const val MAX_IDENTITY_FIELD = 16 * 1024
     }
 }
 
-/** Configure Kadb once before creating any ADB client. */
+/** Configure the persisted Kadb host identity once before creating an ADB client. */
 object AdbIdentity {
     @Volatile private var configured = false
 
     @Synchronized
     fun configure(context: Context) {
         if (configured) return
-        KadbCert.configure(EncryptedAdbKeyStore(context.applicationContext))
+        EncryptedAdbKeyStore(context.applicationContext).configure()
         configured = true
     }
 }

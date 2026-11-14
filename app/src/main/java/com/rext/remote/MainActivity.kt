@@ -177,9 +177,9 @@ private fun RextRemoteApp() {
             .sortedWith(compareBy<AdbEndpoint> { it.host }.thenBy { it.kind.ordinal })
         scanning = false
         if (endpoints.isEmpty()) {
-            connectionStatus = "Устройства пока не найдены. Проверь сеть и ADB на телевизоре."
+            connectionStatus = "Устройства пока не найдены. Проверь сеть телевизора и доступность MiLink, ADB или Bluetooth."
         } else {
-            connectionStatus = "Найдено сетевых ADB-точек: ${endpoints.size}"
+            connectionStatus = "Найдено устройств: ${endpoints.size}"
         }
     }
 
@@ -508,10 +508,11 @@ private fun RextRemoteApp() {
                 apps = installedApps,
                 selected = favoritePackages,
                 onToggle = { packageName ->
-                    persistFavorites(
-                        if (packageName in favoritePackages) favoritePackages - packageName
-                        else favoritePackages + packageName
-                    )
+                    when {
+                        packageName in favoritePackages -> persistFavorites(favoritePackages - packageName)
+                        favoritePackages.size < 3 -> persistFavorites(favoritePackages + packageName)
+                        else -> connectionStatus = "Можно выбрать не более трёх быстрых приложений"
+                    }
                 },
                 onClose = { showAppsSheet = false }
             )
@@ -579,8 +580,6 @@ private fun DevicesPage(
                 OutlineButton("Connect", onClick = onConnect, enabled = !connecting)
             }
         }
-        Spacer(Modifier.height(22.dp))
-        NavIndicators(active = 0, atTop = true, connectionMethod = connectionMethod)
         Spacer(Modifier.height(26.dp))
 
         if (connected) {
@@ -674,7 +673,7 @@ private fun DevicesPage(
                         letterSpacing = 2.sp
                     )
                     UiText(
-                        "Для ADB включи отладку и разреши подключение на экране телевизора. Для Android 11+ можно использовать Wireless debugging.",
+                        "Для Xiaomi ищем MiLink автоматически. Для ADB включи сетевую отладку и подтверди подключение; для Bluetooth выбери телефон в Bluetooth-настройках телевизора.",
                         12.sp,
                         Dim,
                         textAlign = TextAlign.Center,
@@ -696,6 +695,7 @@ private fun DevicesPage(
             )
             Spacer(Modifier.height(12.dp))
         }
+        NavIndicators(active = 0, connectionMethod = connectionMethod)
     }
 }
 
@@ -752,14 +752,14 @@ private fun RemotePage(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            apps.take(5).forEach { app ->
+            apps.take(3).forEach { app ->
                 QuickAppButton(app, onClick = { onApp(app) })
                 Spacer(Modifier.width(14.dp))
             }
             OutlineIconButton(Glyph.PLUS, onAddApps, 42.dp)
         }
         Spacer(Modifier.height(14.dp))
-        NavIndicators(active = 1, atTop = false, connectionMethod = connectionMethod)
+        NavIndicators(active = 1, connectionMethod = connectionMethod)
     }
 }
 
@@ -836,7 +836,6 @@ private fun MousePage(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            NavIndicators(active = 2, atTop = true, connectionMethod = connectionMethod)
             Spacer(Modifier.height(12.dp))
             UiText(
                 if (bluetooth) "BLUETOOTH POINTER" else if (connected) "TOUCH CONTROL" else "MOUSE",
@@ -869,6 +868,7 @@ private fun MousePage(
             MouseActionButton(Glyph.RIGHT_CLICK, "RIGHT", onRightClick)
             MouseActionButton(Glyph.BACK, "BACK", onBack)
         }
+        NavIndicators(active = 2, connectionMethod = connectionMethod)
     }
 }
 
@@ -969,7 +969,7 @@ private fun ConnectMethodSheet(
         }
         Spacer(Modifier.height(8.dp))
         UiText(
-            "Hotspot — это сеть. Само управление выполняется через ADB после того, как телевизор подключится к телефону.",
+            "Hotspot задаёт локальную сеть. После подключения телевизор ищется через совместимые протоколы управления, например MiLink или ADB.",
             11.sp,
             Dim
         )
@@ -1128,7 +1128,7 @@ private fun MouseActionButton(icon: Glyph, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NavIndicators(active: Int, atTop: Boolean, connectionMethod: ConnectionMethod?) {
+private fun NavIndicators(active: Int, connectionMethod: ConnectionMethod?) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 58.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
