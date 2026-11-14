@@ -48,7 +48,7 @@ class BluetoothHidRemote(context: Context) {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, isRegistered: Boolean) {
             registered = isRegistered
             if (isRegistered) {
-                state = if (connectedHost == null) HidConnectionState.WAITING_FOR_TV else HidConnectionState.CONNECTED
+                updateState(if (connectedHost == null) HidConnectionState.WAITING_FOR_TV else HidConnectionState.CONNECTED)
                 registrationWaiter?.complete(true)
             } else {
                 connectedHost = null
@@ -61,11 +61,11 @@ class BluetoothHidRemote(context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     connectedHost = device
-                    state = HidConnectionState.CONNECTED
+                    updateState(HidConnectionState.CONNECTED)
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     if (connectedHost?.address == device.address) connectedHost = null
-                    state = if (registered) HidConnectionState.WAITING_FOR_TV else HidConnectionState.ERROR
+                    updateState(if (registered) HidConnectionState.WAITING_FOR_TV else HidConnectionState.ERROR)
                 }
                 BluetoothProfile.STATE_CONNECTING -> state = HidConnectionState.REGISTERING
                 BluetoothProfile.STATE_DISCONNECTING -> Unit
@@ -75,15 +75,15 @@ class BluetoothHidRemote(context: Context) {
 
     suspend fun registerForTvPairing(): Boolean = withContext(Dispatchers.Main.immediate) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || adapter == null || !adapter.isEnabled) {
-            state = HidConnectionState.UNAVAILABLE
+            updateState(HidConnectionState.UNAVAILABLE)
             return@withContext false
         }
         if (registered && hid != null) {
-            state = if (connectedHost == null) HidConnectionState.WAITING_FOR_TV else HidConnectionState.CONNECTED
+            updateState(if (connectedHost == null) HidConnectionState.WAITING_FOR_TV else HidConnectionState.CONNECTED)
             return@withContext true
         }
 
-        state = HidConnectionState.REGISTERING
+        updateState(HidConnectionState.REGISTERING)
         val waiter = CompletableDeferred<Boolean>()
         registrationWaiter = waiter
         val accepted = adapter.getProfileProxy(
@@ -93,7 +93,7 @@ class BluetoothHidRemote(context: Context) {
                     if (profile != BluetoothProfile.HID_DEVICE) {
                         adapter.closeProfileProxy(profile, proxy)
                         waiter.complete(false)
-                        state = HidConnectionState.ERROR
+                        updateState(HidConnectionState.ERROR)
                         return
                     }
                     hid = proxy as BluetoothHidDevice
@@ -108,7 +108,7 @@ class BluetoothHidRemote(context: Context) {
                         hid?.registerApp(settings, null, null, mainExecutor, callback) == true
                     }.getOrDefault(false)
                     if (!result) {
-                        state = HidConnectionState.ERROR
+                        updateState(HidConnectionState.ERROR)
                         waiter.complete(false)
                     }
                 }
@@ -117,14 +117,14 @@ class BluetoothHidRemote(context: Context) {
                     registered = false
                     connectedHost = null
                     hid = null
-                    state = HidConnectionState.ERROR
+                    updateState(HidConnectionState.ERROR)
                     waiter.complete(false)
                 }
             },
             BluetoothProfile.HID_DEVICE
         )
         if (!accepted) {
-            state = HidConnectionState.ERROR
+            updateState(HidConnectionState.ERROR)
             return@withContext false
         }
         runCatching { kotlinx.coroutines.withTimeout(12_000) { waiter.await() } }
@@ -173,7 +173,7 @@ class BluetoothHidRemote(context: Context) {
         connectedHost = null
         registered = false
         hid = null
-        state = HidConnectionState.UNAVAILABLE
+        updateState(HidConnectionState.UNAVAILABLE)
     }
 
     companion object {
