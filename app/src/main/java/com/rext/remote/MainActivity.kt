@@ -911,7 +911,7 @@ private fun MouseTouchSurface(
                             change.consume()
                         }
                         if (!held && !moved &&
-                            event.uptimeMillis - down.uptimeMillis >= viewConfiguration.longPressTimeoutMillis
+                            change.uptimeMillis - down.uptimeMillis >= viewConfiguration.longPressTimeoutMillis
                         ) {
                             held = true
                             if (bluetooth) onBluetoothHoldStart()
