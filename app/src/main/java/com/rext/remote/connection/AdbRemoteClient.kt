@@ -64,9 +64,52 @@ class AdbRemoteClient(context: Context) : AutoCloseable {
         }
     }
 
+    suspend fun pairWireless(host: String, port: Int, pairingCode: String) = withContext(Dispatchers.IO) {
+        require(isPrivateIpv4(host)) { "Разрешено сопряжение только в локальной сети" }
+        require(port in 1..65535)
+        require(pairingCode.matches(Regex("[0-9]{6}"))) { "Код сопряжения должен содержать 6 цифр" }
+        Kadb.pair(host, port, pairingCode)
+    }
+
     suspend fun sendKey(androidKeyCode: Int) = withContext(Dispatchers.IO) {
         require(androidKeyCode in 0..300)
         active().shell("input keyevent $androidKeyCode")
+    }
+
+    suspend fun displaySize(): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val output = active().shell("wm size").allOutput
+        val matches = Regex("([0-9]{2,5})x([0-9]{2,5})").findAll(output).toList()
+        val match = matches.lastOrNull() ?: error("Не удалось определить размер экрана телевизора")
+        val width = match.groupValues[1].toInt()
+        val height = match.groupValues[2].toInt()
+        require(width in 1..10000 && height in 1..10000)
+        width to height
+    }
+
+    suspend fun tapFraction(x: Float, y: Float) = withContext(Dispatchers.IO) {
+        require(x.isFinite() && y.isFinite() && x in 0f..1f && y in 0f..1f)
+        val (width, height) = displaySize()
+        val screenX = (x * (width - 1)).toInt()
+        val screenY = (y * (height - 1)).toInt()
+        active().shell("input tap $screenX $screenY")
+    }
+
+    suspend fun swipeFraction(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Int = 350
+    ) = withContext(Dispatchers.IO) {
+        val points = listOf(startX, startY, endX, endY)
+        require(points.all { it.isFinite() && it in 0f..1f })
+        require(durationMs in 1..10000)
+        val (width, height) = displaySize()
+        val x1 = (startX * (width - 1)).toInt()
+        val y1 = (startY * (height - 1)).toInt()
+        val x2 = (endX * (width - 1)).toInt()
+        val y2 = (endY * (height - 1)).toInt()
+        active().shell("input swipe $x1 $y1 $x2 $y2 $durationMs")
     }
 
     suspend fun tap(x: Int, y: Int, screenWidth: Int, screenHeight: Int) = withContext(Dispatchers.IO) {
