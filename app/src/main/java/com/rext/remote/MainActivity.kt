@@ -242,6 +242,21 @@ private fun RextRemoteApp() {
         }
     }
 
+    // ADB is the app-inventory provider. Rehydrate previously saved shortcuts when a
+    // TV reconnects through Android TV Remote v2, which can launch but cannot enumerate apps.
+    LaunchedEffect(androidTvRemoteState.phase, androidTvRemoteState.host) {
+        val host = androidTvRemoteState.host ?: return@LaunchedEffect
+        if (androidTvRemoteState.phase != AndroidTvRemotePhase.CONNECTED) return@LaunchedEffect
+        val saved = preferences.getStringSet("quick_apps:$host", emptySet())?.toSet().orEmpty()
+        favoritePackages = saved
+        if (saved.isNotEmpty()) {
+            val existing = installedApps.associateBy { it.packageName }
+            installedApps = saved.map { packageName ->
+                existing[packageName] ?: TvApp(packageName, tvAppFallbackLabel(packageName))
+            }
+        }
+    }
+
     fun persistFavorites(newValue: Set<String>) {
         favoritePackages = newValue
         val host = tvIdentity?.host ?: return
@@ -389,8 +404,15 @@ private fun RextRemoteApp() {
 
     fun launchTvApp(app: TvApp) {
         scope.launch {
-            runCatching { adb.launchApp(app.packageName) }
-                .onFailure { connectionStatus = it.message?.take(120) ?: "Не удалось запустить приложение" }
+            runCatching {
+                when {
+                    adb.isConnected() -> adb.launchApp(app.packageName)
+                    androidTvRemote.isConnected() -> androidTvRemote.launchApp(app.packageName)
+                    else -> error("Сначала подключи телевизор")
+                }
+            }.onFailure {
+                connectionStatus = it.message?.take(120) ?: "Не удалось запустить приложение"
+            }
         }
     }
 
@@ -584,6 +606,15 @@ private fun RextRemoteApp() {
             )
         }
     }
+}
+
+private fun tvAppFallbackLabel(packageName: String): String = when (packageName) {
+    "com.google.android.youtube.tv" -> "YouTube"
+    "com.netflix.ninja" -> "Netflix"
+    "com.amazon.amazonvideo.livingroom" -> "Prime Video"
+    "com.disney.disneyplus" -> "Disney+"
+    "com.google.android.tvlauncher" -> "Google TV"
+    else -> packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }.take(18)
 }
 
 private fun beginBluetoothPairing(

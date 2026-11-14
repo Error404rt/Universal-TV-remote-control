@@ -145,6 +145,18 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         )))
     }
 
+    /** Launch a previously selected TV app using its validated Android package identifier. */
+    suspend fun launchApp(packageName: String) = withContext(Dispatchers.IO) {
+        require(packageName.length <= 255 &&
+            packageName.matches(Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+"))
+        ) { "Некорректный package ID приложения" }
+        check(isConnected()) { "Сначала подключись к телевизору" }
+        check(featureMask and FEATURE_APPS != 0) {
+            "Этот телевизор не предоставляет запуск приложений через Android TV Remote"
+        }
+        send(Proto.bytes(90, Proto.string(1, "market://launch?id=$packageName")))
+    }
+
     fun isConnected(): Boolean {
         val socket = remoteSocket ?: return false
         return mutableState.value.phase == AndroidTvRemotePhase.CONNECTED &&
@@ -470,6 +482,7 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         const val CLIENT_ALIAS = "universal-remote"
         const val KEY_SHORT = 3
         const val FEATURE_KEY = 2
-        const val SUPPORTED_FEATURES = 1 or 2 or 4 or 32 or 64 or 512
+        const val FEATURE_APPS = 512
+        const val SUPPORTED_FEATURES = 1 or 2 or 32 or 64 or 512
     }
 }
