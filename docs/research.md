@@ -1,6 +1,6 @@
 # Open-source protocol research
 
-Research is for protocol and architecture understanding. REXT Remote keeps the user's original UI and the three product-specific connection choices. Before copying source code or adding a dependency, inspect its license and attribution requirements.
+Research is for protocol and architecture understanding. Universal Remote Control keeps the user's original UI and the three product-specific connection choices. Before copying source code or adding a dependency, inspect its license and attribution requirements.
 
 ## Projects reviewed
 
@@ -10,9 +10,9 @@ https://github.com/flyfishxu/Kadb
 - Kotlin Multiplatform ADB client.
 - Apache-2.0 license.
 - Provides classic ADB TCP, Android 11+ wireless pairing, shell commands and optional mDNS discovery.
-- The app currently uses the Kadb client for ADB transport and Android's built-in NsdManager for _adb._tcp, _adb-tls-connect._tcp and _adb-tls-pairing._tcp discovery.
-- Kadb's own build uses JitPack for the spake2-java pairing dependency; the REXT build includes that repository.
-- ADB key persistence in REXT uses its own Android Keystore-backed AES-GCM store.
+- The app uses Kadb for classic ADB TCP shell transport and Android's built-in NsdManager for `_adb._tcp` and `_androidtvremote2._tcp` discovery.
+- Kadb can perform Android 11+ wireless pairing, but this app intentionally exposes only classic network ADB on port 5555; the TLS pairing endpoints are not used.
+- ADB key persistence in Universal Remote Control uses its own Android Keystore-backed AES-GCM store.
 
 ### levhakobyan/OpenTV-Remote
 https://github.com/levhakobyan/OpenTV-Remote
@@ -54,7 +54,7 @@ https://github.com/jqssun/android-bt-remote
 3. A phone hotspot only provides the local IP network. It does not replace Android TV Remote v2, Samsung, webOS, Roku or another vendor protocol.
 4. Samsung, webOS, Roku and VIDAA need separate providers and pairing/authorization handling.
 5. ADB key events and ADB input tap/swipe do not create a system mouse cursor. A true cursor requires Bluetooth HID mouse support or a TV protocol that exposes pointer input.
-6. First-time ADB approval is controlled by the TV. ADB must be exposed over TCP or Wireless debugging for network connection.
+6. First-time ADB approval is controlled by the TV. ADB must be exposed over classic TCP port 5555; this app does not implement Android 11+ wireless-debugging pairing.
 
 ## License policy
 
@@ -63,7 +63,7 @@ https://github.com/jqssun/android-bt-remote
 - jqssun/android-bt-remote is GPL-3.0.
 - The Android TV Remote v2 reference project has no direct-reuse license confirmed.
 
-REXT should not copy GPL code unless the project deliberately adopts compatible licensing. Any reused Apache/MIT code must retain license and attribution notices.
+Universal Remote Control should not copy GPL code unless the project deliberately adopts compatible licensing. Any reused Apache/MIT code must retain license and attribution notices.
 
 ## Android implementation baseline
 

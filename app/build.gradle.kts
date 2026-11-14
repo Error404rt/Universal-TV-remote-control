@@ -6,15 +6,15 @@ plugins {
 }
 
 android {
-    namespace = "com.rext.remote"
+    namespace = "com.universalremote.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.rext.remote"
+        applicationId = "com.universalremote.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
 
     buildFeatures {
@@ -44,6 +44,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     implementation("com.flyfishxu:kadb:1.3.0")
+
+    testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

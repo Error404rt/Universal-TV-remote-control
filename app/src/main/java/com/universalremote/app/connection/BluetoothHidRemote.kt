@@ -1,4 +1,4 @@
-package com.rext.remote.connection
+package com.universalremote.app.connection
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
@@ -36,16 +36,26 @@ class BluetoothHidRemote(context: Context) {
     @Volatile var connectedHost: BluetoothDevice? = null
         private set
 
+    // Set by disconnect() so callbacks triggered by unregistering the app do not
+    // publish a stale ERROR state after the user intentionally disconnected.
+    @Volatile private var closing = false
+
     private fun updateState(value: HidConnectionState) {
+        if (closing && value != HidConnectionState.UNAVAILABLE) return
         mutableState.value = value
     }
 
     private var hid: BluetoothHidDevice? = null
+    private var profileProxy: BluetoothProfile? = null
     private var registered = false
     private var registrationWaiter: CompletableDeferred<Boolean>? = null
 
+    val isRegistered: Boolean get() = registered
+    val isConnected: Boolean get() = connectedHost != null
+
     private val callback = object : BluetoothHidDevice.Callback() {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, isRegistered: Boolean) {
+            if (closing) return
             registered = isRegistered
             if (isRegistered) {
                 updateState(if (connectedHost == null) HidConnectionState.WAITING_FOR_TV else HidConnectionState.CONNECTED)
@@ -58,6 +68,7 @@ class BluetoothHidRemote(context: Context) {
         }
 
         override fun onConnectionStateChanged(device: BluetoothDevice, newState: Int) {
+            if (closing) return
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     connectedHost = device
@@ -74,6 +85,7 @@ class BluetoothHidRemote(context: Context) {
     }
 
     suspend fun registerForTvPairing(): Boolean = withContext(Dispatchers.Main.immediate) {
+        closing = false
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || adapter == null || !adapter.isEnabled) {
             updateState(HidConnectionState.UNAVAILABLE)
             return@withContext false
@@ -90,6 +102,10 @@ class BluetoothHidRemote(context: Context) {
             appContext,
             object : BluetoothProfile.ServiceListener {
                 override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                    if (closing) {
+                        adapter.closeProfileProxy(profile, proxy)
+                        return
+                    }
                     if (profile != BluetoothProfile.HID_DEVICE) {
                         adapter.closeProfileProxy(profile, proxy)
                         waiter.complete(false)
@@ -97,6 +113,7 @@ class BluetoothHidRemote(context: Context) {
                         return
                     }
                     hid = proxy as BluetoothHidDevice
+                    profileProxy = proxy
                     val settings = BluetoothHidDeviceAppSdpSettings(
                         "Universal Remote Control",
                         "TV remote control with mouse",
@@ -114,9 +131,11 @@ class BluetoothHidRemote(context: Context) {
                 }
 
                 override fun onServiceDisconnected(profile: Int) {
+                    if (closing) return
                     registered = false
                     connectedHost = null
                     hid = null
+                    profileProxy = null
                     updateState(HidConnectionState.ERROR)
                     waiter.complete(false)
                 }
@@ -127,17 +146,32 @@ class BluetoothHidRemote(context: Context) {
             updateState(HidConnectionState.ERROR)
             return@withContext false
         }
-        runCatching { kotlinx.coroutines.withTimeout(12_000) { waiter.await() } }
-            .getOrDefault(false)
+        val result = runCatching {
+            kotlinx.coroutines.withTimeout(12_000) { waiter.await() }
+        }.getOrDefault(false)
+        registrationWaiter = null
+        if (!result) updateState(HidConnectionState.ERROR)
+        result
     }
 
     suspend fun sendNavigationKey(key: NavigationKey): Boolean = withContext(Dispatchers.Main.immediate) {
         val device = connectedHost ?: return@withContext false
         val proxy = hid ?: return@withContext false
         val usage = key.keyboardUsage
+        sendKeyboardUsageNow(proxy, device, usage)
+    }
+
+    suspend fun sendKeyboardUsage(usage: Int): Boolean = withContext(Dispatchers.Main.immediate) {
+        require(usage in 0..0xff)
+        val device = connectedHost ?: return@withContext false
+        val proxy = hid ?: return@withContext false
+        sendKeyboardUsageNow(proxy, device, usage)
+    }
+
+    private fun sendKeyboardUsageNow(proxy: BluetoothHidDevice, device: BluetoothDevice, usage: Int): Boolean {
         val press = ByteArray(8).also { it[2] = usage.toByte() }
         val release = ByteArray(8)
-        runCatching {
+        return runCatching {
             proxy.sendReport(device, HidReports.KEYBOARD_REPORT_ID, press) &&
                 proxy.sendReport(device, HidReports.KEYBOARD_REPORT_ID, release)
         }.getOrDefault(false)
@@ -178,14 +212,19 @@ class BluetoothHidRemote(context: Context) {
     }
 
     fun disconnect() {
+        closing = true
         runCatching {
             connectedHost?.let { hid?.disconnect(it) }
             hid?.unregisterApp()
+            profileProxy?.let { adapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, it) }
         }
         connectedHost = null
         registered = false
         hid = null
-        updateState(HidConnectionState.UNAVAILABLE)
+        profileProxy = null
+        registrationWaiter?.complete(false)
+        registrationWaiter = null
+        mutableState.value = HidConnectionState.UNAVAILABLE
     }
 
     companion object {

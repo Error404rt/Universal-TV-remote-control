@@ -1,4 +1,4 @@
-package com.rext.remote.connection
+package com.universalremote.app.connection
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
@@ -21,7 +21,7 @@ import javax.crypto.spec.GCMParameterSpec
  */
 class EncryptedAdbKeyStore(context: Context) {
     private val preferences = context.applicationContext
-        .getSharedPreferences("rext_adb_identity", Context.MODE_PRIVATE)
+        .getSharedPreferences("universal_remote_adb_identity", Context.MODE_PRIVATE)
 
     @Synchronized
     fun configure() {
@@ -106,7 +106,7 @@ class EncryptedAdbKeyStore(context: Context) {
 
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        private const val KEY_ALIAS = "rext.remote.adb.identity.aes"
+        private const val KEY_ALIAS = "universal.remote.adb.identity.aes"
         private const val KEY_PAYLOAD = "encrypted_private_key"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val IV_LENGTH = 12

@@ -1,4 +1,4 @@
-package com.rext.remote.connection
+package com.universalremote.app.connection
 
 import android.content.Context
 import android.util.Base64
@@ -14,9 +14,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
-import java.io.InputStream
-import java.io.OutputStream
-import java.math.BigInteger
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.KeyFactory
@@ -27,8 +24,8 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.PKCS8EncodedKeySpec
-import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509TrustManager
 
@@ -61,18 +58,29 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
     private val mutableState = MutableStateFlow(AndroidTvRemoteState())
     val stateFlow = mutableState.asStateFlow()
 
+    val connectedHost: String? get() = activeHost
+
     init {
         AdbIdentity.configure(appContext)
     }
 
+    fun hasPairing(host: String): Boolean =
+        preferences.getString(pinKey(host), null) != null
+
     suspend fun connect(host: String) = withContext(Dispatchers.IO) {
-        require(isPrivateIpv4(host)) { "Разрешено подключение только к телевизору в локальной сети" }
+        require(NetworkUtils.isPrivateIpv4(host)) {
+            "Разрешено подключение только к телевизору в локальной сети"
+        }
         disconnect()
         activeHost = host
-        mutableState.value = AndroidTvRemoteState(AndroidTvRemotePhase.CONNECTING, host, "Подключаюсь к Android TV Remote…")
+        mutableState.value = AndroidTvRemoteState(
+            AndroidTvRemotePhase.CONNECTING,
+            host,
+            "Подключаюсь к Android TV Remote…"
+        )
 
         try {
-            if (preferences.getString(pinKey(host), null) == null) {
+            if (!hasPairing(host)) {
                 beginPairing(host)
             } else {
                 startRemote(host)
@@ -89,7 +97,8 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
     }
 
     suspend fun pair(code: String) = withContext(Dispatchers.IO) {
-        require(code.matches(Regex("[0-9a-fA-F]{6}"))) {
+        val normalized = code.trim().uppercase()
+        require(normalized.matches(PairingCrypto.CODE_PATTERN)) {
             "Код сопряжения должен содержать шесть символов от 0 до 9 или A до F"
         }
         val host = activeHost ?: error("Сначала выбери телевизор")
@@ -103,23 +112,12 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
             val serverKey = serverCertificate.publicKey as? RSAPublicKey
                 ?: error("Телевизор использует неподдерживаемый ключ")
 
-            val codeTail = byteArrayOf(
-                code.substring(2, 4).toInt(16).toByte(),
-                code.substring(4, 6).toInt(16).toByte()
-            )
-            val digest = MessageDigest.getInstance("SHA-256").digest(
-                unsigned(clientKey.modulus) +
-                    unsigned(clientKey.publicExponent) +
-                    unsigned(serverKey.modulus) +
-                    unsigned(serverKey.publicExponent) +
-                    codeTail
-            )
-            val expectedPrefix = code.substring(0, 2).toInt(16)
-            require((digest[0].toInt() and 0xff) == expectedPrefix) {
+            val digest = PairingCrypto.digest(clientKey, serverKey, normalized)
+            require(PairingCrypto.matchesPrefix(digest, normalized)) {
                 "Код не совпадает с телевизором. Проверь код на экране ТВ."
             }
 
-            exchange(socket, 40, Proto.bytes(1, digest), 41)
+            exchange(socket, 40, RemoteWire.bytes(1, digest), 41)
             preferences.edit().putString(pinKey(host), fingerprint(serverCertificate)).commit()
             pairingSocket = null
             runCatching { socket.close() }
@@ -137,24 +135,24 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
     }
 
     suspend fun sendKey(androidKeyCode: Int) = withContext(Dispatchers.IO) {
-        require(androidKeyCode in 0..300) { "Некорректная команда" }
-        check(isConnected()) { "Сначала подключись к телевизору" }
-        send(Proto.bytes(10, Proto.message(
-            Proto.int(1, androidKeyCode),
-            Proto.int(2, KEY_SHORT)
-        )))
+        sendKeyEvent(androidKeyCode, RemoteWire.KEY_SHORT)
+    }
+
+    suspend fun sendKeyDown(androidKeyCode: Int) = withContext(Dispatchers.IO) {
+        sendKeyEvent(androidKeyCode, RemoteWire.KEY_DOWN)
+    }
+
+    suspend fun sendKeyUp(androidKeyCode: Int) = withContext(Dispatchers.IO) {
+        sendKeyEvent(androidKeyCode, RemoteWire.KEY_UP)
     }
 
     /** Launch a previously selected TV app using its validated Android package identifier. */
     suspend fun launchApp(packageName: String) = withContext(Dispatchers.IO) {
-        require(packageName.length <= 255 &&
-            packageName.matches(Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+"))
-        ) { "Некорректный package ID приложения" }
         check(isConnected()) { "Сначала подключись к телевизору" }
         check(featureMask and FEATURE_APPS != 0) {
             "Этот телевизор не предоставляет запуск приложений через Android TV Remote"
         }
-        send(Proto.bytes(90, Proto.string(1, "market://launch?id=$packageName")))
+        send(RemoteWire.appLink(packageName))
     }
 
     fun isConnected(): Boolean {
@@ -163,16 +161,21 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
             socket.isConnected && !socket.isClosed
     }
 
-    fun forget() {
-        activeHost?.let { preferences.edit().remove(pinKey(it)).commit() }
-        disconnect()
-    }
-
     fun disconnect() {
         closeSockets()
         activeHost = null
         featureMask = 0
         mutableState.value = AndroidTvRemoteState()
+    }
+
+    fun forget(host: String? = activeHost) {
+        host?.let { preferences.edit().remove(pinKey(it)).commit() }
+        if (host == null || host == activeHost) disconnect()
+    }
+
+    override fun close() {
+        disconnect()
+        scope.cancel()
     }
 
     /** Close pairing and control channels without changing the selected TV identity. */
@@ -187,9 +190,10 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         runCatching { remote?.close() }
     }
 
-    override fun close() {
-        disconnect()
-        scope.cancel()
+    private fun sendKeyEvent(androidKeyCode: Int, direction: Int) {
+        require(androidKeyCode in 0..300) { "Некорректная команда" }
+        check(isConnected()) { "Сначала подключись к телевизору" }
+        send(RemoteWire.key(androidKeyCode, direction))
     }
 
     private fun beginPairing(host: String) {
@@ -199,12 +203,15 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         exchange(
             socket,
             10,
-            Proto.message(Proto.string(1, "atvremote"), Proto.string(2, "Universal Remote Control")),
+            RemoteWire.message(
+                RemoteWire.string(1, "atvremote"),
+                RemoteWire.string(2, "Universal Remote Control")
+            ),
             11
         )
-        val encoding = Proto.message(Proto.int(1, 3), Proto.int(2, 6))
-        exchange(socket, 20, Proto.message(Proto.bytes(1, encoding), Proto.int(3, 1)), 20)
-        exchange(socket, 30, Proto.message(Proto.bytes(1, encoding), Proto.int(2, 1)), 31)
+        val encoding = RemoteWire.message(RemoteWire.int(1, 3), RemoteWire.int(2, 6))
+        exchange(socket, 20, RemoteWire.message(RemoteWire.bytes(1, encoding), RemoteWire.int(3, 1)), 20)
+        exchange(socket, 30, RemoteWire.message(RemoteWire.bytes(1, encoding), RemoteWire.int(2, 1)), 31)
 
         mutableState.value = AndroidTvRemoteState(
             AndroidTvRemotePhase.AWAITING_CODE,
@@ -225,29 +232,29 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
             try {
                 val input = socket.inputStream
                 while (isActive && !socket.isClosed) {
-                    val message = Proto.parse(Proto.frame(input))
+                    val message = RemoteWire.parse(RemoteWire.frame(input))
                     when {
                         message.any { it.number == 1 } -> {
                             featureMask = message.nested(1).num(1) and SUPPORTED_FEATURES
                             check(featureMask and FEATURE_KEY != 0) {
                                 "Телевизор не поддерживает команды пульта Android TV Remote"
                             }
-                            val appInfo = Proto.message(
-                                Proto.int(3, 1),
-                                Proto.string(4, "1"),
-                                Proto.string(5, "Universal Remote Control"),
-                                Proto.string(6, "0.5.0")
+                            val appInfo = RemoteWire.message(
+                                RemoteWire.int(3, 1),
+                                RemoteWire.string(4, "1"),
+                                RemoteWire.string(5, "com.universalremote.app"),
+                                RemoteWire.string(6, APP_VERSION)
                             )
-                            send(Proto.bytes(1, Proto.message(
-                                Proto.int(1, featureMask),
-                                Proto.bytes(2, appInfo)
+                            send(RemoteWire.bytes(1, RemoteWire.message(
+                                RemoteWire.int(1, featureMask),
+                                RemoteWire.bytes(2, appInfo)
                             )))
                         }
                         message.any { it.number == 2 } -> {
-                            send(Proto.bytes(2, Proto.int(1, featureMask)))
+                            send(RemoteWire.bytes(2, RemoteWire.int(1, featureMask)))
                         }
                         message.any { it.number == 8 } -> {
-                            send(Proto.bytes(9, Proto.int(1, message.nested(8).num(1))))
+                            send(RemoteWire.bytes(9, RemoteWire.int(1, message.nested(8).num(1))))
                         }
                         message.any { it.number == 40 } -> {
                             socket.soTimeout = 0
@@ -284,34 +291,43 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         val keyManager = object : X509ExtendedKeyManager() {
             override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?): Array<String> =
                 arrayOf(CLIENT_ALIAS)
+
             override fun chooseClientAlias(
                 keyType: Array<out String>?,
                 issuers: Array<out Principal>?,
                 socket: Socket?
             ): String = CLIENT_ALIAS
+
             override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?): Array<String>? = null
+
             override fun chooseServerAlias(
                 keyType: String?,
                 issuers: Array<out Principal>?,
                 socket: Socket?
             ): String? = null
+
             override fun getCertificateChain(alias: String?): Array<X509Certificate> =
                 arrayOf(certificate)
+
             override fun getPrivateKey(alias: String?): PrivateKey = privateKey
         }
 
         val trustManager = object : X509TrustManager {
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
                 throw java.security.cert.CertificateException("Client trust is not used")
             }
+
             override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {
                 if (pairing) return
                 val expected = preferences.getString(pinKey(host), null)
                     ?: throw java.security.cert.CertificateException("Требуется повторное сопряжение")
                 val actual = fingerprint(chain.first())
                 if (actual != expected) {
-                    throw java.security.cert.CertificateException("Сертификат телевизора изменился. Удали устройство и сопряги снова.")
+                    throw java.security.cert.CertificateException(
+                        "Сертификат телевизора изменился. Удали устройство и сопряги снова."
+                    )
                 }
             }
         }
@@ -348,12 +364,15 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
     }
 
     private fun exchange(socket: SSLSocket, field: Int, payload: ByteArray, expectedField: Int) {
-        Proto.write(socket.outputStream, Proto.message(
-            Proto.int(1, 2),
-            Proto.int(2, 200),
-            Proto.bytes(field, payload)
-        ))
-        val response = Proto.parse(Proto.frame(socket.inputStream))
+        RemoteWire.write(
+            socket.outputStream,
+            RemoteWire.message(
+                RemoteWire.int(1, 2),
+                RemoteWire.int(2, 200),
+                RemoteWire.bytes(field, payload)
+            )
+        )
+        val response = RemoteWire.parse(RemoteWire.frame(socket.inputStream))
         check(response.num(2) == 200 && response.any { it.number == expectedField }) {
             "Телевизор отклонил сопряжение"
         }
@@ -363,7 +382,7 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         synchronized(lock) {
             val socket = remoteSocket ?: error("Нет соединения с телевизором")
             check(!socket.isClosed)
-            Proto.write(socket.outputStream, bytes)
+            RemoteWire.write(socket.outputStream, bytes)
         }
     }
 
@@ -371,118 +390,18 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
         MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
             .joinToString("") { "%02x".format(it) }
 
-    private fun unsigned(value: BigInteger): ByteArray = value.toByteArray().let {
-        if (it.size > 1 && it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it
-    }
-
     private fun pinKey(host: String) = "tv_pin:$host"
-
-    private fun isPrivateIpv4(host: String): Boolean = runCatching {
-        val parts = host.split('.').map(String::toInt)
-        parts.size == 4 && parts.all { it in 0..255 } &&
-            (parts[0] == 10 ||
-                (parts[0] == 172 && parts[1] in 16..31) ||
-                (parts[0] == 192 && parts[1] == 168))
-    }.getOrDefault(false)
-
-    private fun List<Proto.Field>.num(field: Int): Int =
-        firstOrNull { it.number == field }?.value?.toInt() ?: 0
-
-    private fun List<Proto.Field>.nested(field: Int): List<Proto.Field> =
-        firstOrNull { it.number == field }?.bytes?.let { Proto.parse(it) } ?: emptyList()
-
-    private object Proto {
-        data class Field(val number: Int, val value: Long = 0, val bytes: ByteArray? = null)
-
-        fun varint(value: Long): ByteArray {
-            require(value >= 0)
-            var number = value
-            val output = java.io.ByteArrayOutputStream()
-            while (number > 127) {
-                output.write(((number and 127) or 128).toInt())
-                number = number ushr 7
-            }
-            output.write(number.toInt())
-            return output.toByteArray()
-        }
-
-        fun int(field: Int, value: Int): ByteArray =
-            varint((field * 8).toLong()) + varint(value.toLong())
-
-        fun bytes(field: Int, value: ByteArray): ByteArray =
-            varint((field * 8 + 2).toLong()) + varint(value.size.toLong()) + value
-
-        fun string(field: Int, value: String): ByteArray = bytes(field, value.toByteArray(Charsets.UTF_8))
-
-        fun message(vararg fields: ByteArray): ByteArray =
-            fields.fold(ByteArray(0)) { result, field -> result + field }
-
-        fun readVarint(input: InputStream): Long {
-            var value = 0L
-            for (index in 0..9) {
-                val byte = input.read()
-                require(byte >= 0) { "Телевизор закрыл соединение" }
-                require(index < 9 || byte <= 1) { "Неверный protobuf varint" }
-                value = value or ((byte and 127).toLong() shl (7 * index))
-                if (byte and 128 == 0) return value
-            }
-            error("Неверный protobuf varint")
-        }
-
-        fun parse(bytes: ByteArray): List<Field> {
-            val input = ByteArrayInputStream(bytes)
-            val fields = mutableListOf<Field>()
-            while (input.available() > 0) {
-                val tag = readVarint(input).toInt()
-                val number = tag ushr 3
-                require(number > 0)
-                when (tag and 7) {
-                    0 -> fields += Field(number, readVarint(input))
-                    2 -> {
-                        val length = readVarint(input)
-                        require(length in 0..MAX_FRAME_SIZE && length <= input.available())
-                        val data = ByteArray(length.toInt())
-                        require(input.read(data) == data.size)
-                        fields += Field(number, bytes = data)
-                    }
-                    1 -> require(input.skip(8) == 8L)
-                    5 -> require(input.skip(4) == 4L)
-                    else -> error("Неподдерживаемый protobuf wire type")
-                }
-            }
-            return fields
-        }
-
-        fun frame(input: InputStream): ByteArray {
-            val length = readVarint(input)
-            require(length in 1..MAX_FRAME_SIZE)
-            val data = ByteArray(length.toInt())
-            var offset = 0
-            while (offset < data.size) {
-                val read = input.read(data, offset, data.size - offset)
-                require(read > 0) { "Телевизор закрыл соединение" }
-                offset += read
-            }
-            return data
-        }
-
-        fun write(output: OutputStream, bytes: ByteArray) {
-            output.write(varint(bytes.size.toLong()))
-            output.write(bytes)
-            output.flush()
-        }
-    }
 
     private companion object {
         const val PAIRING_PORT = 6467
         const val REMOTE_PORT = 6466
         const val CONNECT_TIMEOUT_MS = 6000
         const val SOCKET_TIMEOUT_MS = 10000
-        const val MAX_FRAME_SIZE = 1_048_576
         const val CLIENT_ALIAS = "universal-remote"
-        const val KEY_SHORT = 3
+        const val KEY_SHORT = RemoteWire.KEY_SHORT
         const val FEATURE_KEY = 2
         const val FEATURE_APPS = 512
         const val SUPPORTED_FEATURES = 1 or 2 or 32 or 64 or 512
+        const val APP_VERSION = "0.5.0"
     }
 }

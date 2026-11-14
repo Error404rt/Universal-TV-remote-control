@@ -4,119 +4,121 @@
 
 - The supplied monochrome outline reference is the UI specification.
 - No Material Design components, Material icon pack, filled controls, shadows or decorative surfaces.
-- The three connection methods live inside the selected TV's Connect action: Bluetooth HID, phone hotspot + a local TV protocol, and shared Wi-Fi + a local TV protocol.
-- These are not the three swipe-navigation destinations.
-- The app destinations are Devices, Remote and Mouse. Navigation uses horizontal swipes; indicators are not buttons.
-- The selected connection method determines the TV's connection icon: Bluetooth, phone or Wi-Fi.
+- The three connection methods live inside the **Connect** action: Bluetooth HID, phone hotspot + local protocol, shared Wi-Fi + local protocol.
+- These are not the three swipe destinations.
+- Swipe destinations are Touchpad, Remote and Devices. Swiping right from Remote opens Touchpad; swiping left opens Devices.
+- The selected connection method determines the left connection indicator: Bluetooth, phone or Wi-Fi.
+
+## Source layout
+
+| Area | File |
+|---|---|
+| Activity and state orchestration | `app/src/main/java/com/universalremote/app/MainActivity.kt` |
+| Pages, sheets and touch surface | `RemoteScreens.kt` |
+| Outline theme, icons and primitives | `OutlineUi.kt` |
+| Discovery | `connection/TvDiscovery.kt` |
+| Domain models and candidate merge | `connection/TvModels.kt` |
+| Saved TVs | `connection/SavedTvStore.kt` |
+| Android TV Remote v2 | `connection/AndroidTvRemoteV2.kt` |
+| ADB | `connection/AdbRemoteClient.kt` |
+| Bluetooth HID | `connection/BluetoothHidRemote.kt` |
+| Wire codec / pairing digest | `connection/RemoteWire.kt`, `connection/PairingCrypto.kt` |
+| Network and hotspot state | `connection/NetworkUtils.kt`, `connection/NetworkStatus.kt` |
+| Curated app catalog | `connection/TvAppCatalog.kt` |
 
 ## UI
 
-Jetpack Compose Foundation + Canvas are used for layout, gestures and drawing, but every visible control is custom outline artwork.
+Jetpack Compose Foundation + Canvas are used for layout, gestures and drawing. Every visible control is custom outline artwork.
 
-- Devices: discovered TV/ADB endpoints, Connect at the upper right, method chooser and connection status.
-- Remote: outlined circular D-pad, OK, Menu, Back, Home and quick-launch app shortcuts with a plus control.
-- Mouse: square rounded-outline touch surface and compact secondary controls.
-- The three nav indicators stay at the bottom on all screens.
-- The selected section is shown as a small dot; the two inactive sections show their outline icons.
+- Devices: saved/discovered `TvCandidate` rows, Connect at upper right, manual IP, refresh and status.
+- Remote: outlined circular D-pad, OK, Menu, Back, Home and up to three quick-app shortcuts with a plus control.
+- Touchpad: rounded-square outline surface, left/right/back actions and a connection-specific hint.
+- The bottom bar keeps the connection icon on the left and three page indicators in the center.
+- The active page is a small dot; inactive pages show outline icons.
 
 ## Domain
 
-Core models:
-- TvDevice: stable id, display name, manufacturer/model hints, address, platform hints.
-- ConnectionMethod: BLUETOOTH_HID, PHONE_HOTSPOT, SHARED_WIFI.
-- TvProtocol: ADB_TCP, ADB_TLS, ANDROID_TV_REMOTE_V2, WEBOS_SSAP, SAMSUNG_REMOTE, ROKU_ECP, BLUETOOTH_HID.
-- TvCapabilities: dpad, back, home, menu, text input, media keys, volume, pointer, drag, long-press.
-- PairingState: not-required, needs-user-confirmation, paired, failed.
-- SupportEvidence: candidate, protocol-detected, tested-on-model, verified.
+- `TvEndpoint`: one protocol endpoint (`host`, `port`, `TvEndpointKind`).
+- `TvProtocol`: `ANDROID_TV_REMOTE`, `ADB`, `BLUETOOTH_HID`.
+- `TvCandidate`: one physical TV, merging a host's endpoints and optional saved entry.
+- `SavedTv`: persisted name, host, port, protocol and connection method.
+- `ConnectionMethod`: `BLUETOOTH`, `HOTSPOT`, `WIFI`.
+- `TvApp`: package name, display name, optional component name.
+
+`buildTvCandidates` merges endpoints and saved TVs by host. Saved TVs remain selectable while offline.
+`preferredEndpoint()` prefers Android TV Remote, then ADB, then Bluetooth.
 
 ## Discovery
 
-Use protocol-specific discovery:
-- Android NsdManager mDNS: _adb._tcp, _adb-tls-connect._tcp, _adb-tls-pairing._tcp, _androidtvremote2._tcp and Xiaomi _googlecast._tcp.
-- Bounded local IPv4 subnet probe for classic ADB TCP port 5555 when ADB mDNS is missing.
-- Android TV Remote v2: _androidtvremote2._tcp discovery, bounded TCP 6466 fallback, six-character pairing over TLS 6467 and pinned TLS control on 6466.
-- Samsung / LG / Roku: platform-specific local discovery (future providers).
-- Bluetooth HID: phone advertises a HID input device; the TV initiates accessory discovery and pairing.
+- DNS-SD via `NsdManager` for `_androidtvremote2._tcp` and `_adb._tcp`.
+- NsdManager resolutions are serialized because many Android versions allow only one resolve at a time.
+- A bounded private IPv4 subnet probe checks TCP 6466 (Android TV Remote) and TCP 5555 (ADB).
+- Saved hosts are probed explicitly even when their subnet is no longer scanned.
+- Only RFC1918/private and CGNAT addresses are accepted. Probe count and concurrency are capped.
+- mDNS callbacks are lossy; rows stay visible until refresh instead of flickering on service-lost events.
 
-A discovered TCP port is only a candidate. ADB requires a shell handshake; Android TV Remote v2 requires successful TLS pairing/control state; MiLink requires an open MiLink socket.
+A discovered TCP port is only a candidate. ADB requires a shell handshake and TV-side authorization. Android TV Remote requires successful pairing/control state.
 
-## Connection providers
+## Connection flow
 
-Each provider should implement a common interface:
-- discover()
-- pair(device)
-- connect(device)
-- send(command)
-- disconnect()
+1. User chooses Connect → one of three methods.
+2. Bluetooth starts HID registration and phone discoverability.
+3. Hotspot/Wi-Fi refresh network state, open system settings if needed, then scan.
+4. Tapping a candidate connects using its saved method or the pending method.
+5. Android TV Remote may ask for the six-character TV code.
+6. Successful connections are saved with the selected method.
+7. Switching TV disconnects the previous transport without discarding saved pairings.
 
-Providers own protocol-specific pairing, transport, retries, timeouts and capability reporting. Never send Android TV protobuf frames to Samsung/webOS devices.
+## Android TV Remote v2
 
-### ADB provider
+- Pairing: TLS 1.2 on TCP 6467, RSA client identity from the Kadb-compatible key store.
+- SHA-256 pairing digest and six-character code validation live in `PairingCrypto`.
+- After pairing, the TV certificate SHA-256 fingerprint is pinned per host.
+- Control: TLS 1.2 on TCP 6466, protobuf frames encoded by `RemoteWire`.
+- Supported input: D-pad, OK, Back, Home, Menu, app links.
+- Not supported by the protocol in this implementation: installed-app inventory, system pointer, touch coordinates.
+- On the touchpad, taps become OK and swipes become D-pad focus movements.
 
-The current implementation uses Kadb 1.3.0 (Apache-2.0) for classic TCP ADB and Android 11+ wireless pairing/connect endpoints. The ADB host key is persisted encrypted with AES-GCM using Android Keystore. ADB authorization remains user-controlled by the TV's own RSA/wireless-debugging confirmation.
+## ADB provider
 
-Supported commands in the current provider:
-- Android key events for D-pad, OK, Back, Home and Menu.
-- ADB tap/swipe input for touch-style fallback.
-- Leanback-launchable app discovery and app launch.
+- Kadb 1.3.0 (Apache-2.0) over classic TCP ADB.
+- The host key is encrypted with AES-GCM and a non-exportable Android Keystore key.
+- First connection is authorized by the TV's own RSA prompt.
+- Supported: key events, tap/swipe, installed Leanback activities and app launch.
+- Android 11+ wireless-debugging pair/connect endpoints are intentionally not implemented; the UI does not claim them.
 
-ADB input tap/swipe does not create a system mouse cursor. It is a touch-event fallback, not a true pointer.
+## Bluetooth HID provider
 
-### Bluetooth HID provider
+- The phone registers as a HID keyboard + relative mouse + consumer-control device.
+- Pairing starts from the TV's Bluetooth accessory menu.
+- Android may unregister a HID app when it leaves the foreground; keep the app open during pointer use.
+- A real cursor appears only when TV firmware supports HID mouse input.
 
-The phone registers as a Bluetooth HID keyboard + relative mouse + consumer-control device. The TV must act as the HID host and pair with the phone. The provider advertises actual HID connection state to the UI.
+## Hotspot vs shared Wi-Fi
 
-HID mouse input can provide a real cursor only when the TV firmware supports Bluetooth HID mouse input. Android may unregister a HID device app when it is no longer in the foreground, so the app should remain open during mouse use.
+Both use the same local protocol providers after discovery. Only the network topology differs.
 
-### Hotspot vs shared Wi-Fi
+- Hotspot: TV joins the phone's tethering network. The TV must already know the credentials.
+- Shared Wi-Fi: both devices are on the same router network.
 
-Phone hotspot and shared Wi-Fi use the same local TV protocol provider after network discovery. Their only difference is network topology:
-- Phone hotspot: TV joins the phone's internet-sharing network.
-- Shared Wi-Fi: both are already connected to the same router/network.
+Android's public API cannot toggle a hotspot. `HotspotController` opens the system tethering screen; `NetworkStatus` reports hotspot/Wi-Fi state and local addresses.
+The app never claims it can force a TV onto the hotspot or read its password.
 
-The app must not claim it can force a TV onto the hotspot or read/enter its Wi-Fi password. The TV must already know the credentials or be connected manually once.
+## Saved devices and quick apps
 
-## Input model
-
-Normalize UI gestures into:
-- KeyDown / KeyUp
-- Tap
-- LongPress
-- PointerMove
-- PointerButtonDown / PointerButtonUp
-- TextInput
-
-A provider advertises only the capabilities it can actually deliver. A D-pad working does not prove that a true pointer works.
+- `SavedTvStore` persists up to 16 TVs as JSON in SharedPreferences.
+- Only network identity and selected method are stored; ADB/TLS secrets remain in their own stores.
+- Quick-app package IDs are stored per host and capped at three.
+- ADB supplies the real installed-app list. Android TV Remote uses a curated fallback because the protocol cannot enumerate apps.
 
 ## Security and privacy
 
-- Pairing credentials and private ADB identities are encrypted with Android Keystore-backed storage.
-- Do not log pairing codes, private keys, tokens or command payloads.
-- Only scan local private IPv4 subnets and cap probe concurrency/host count.
-- Request Bluetooth permissions only when the user chooses Bluetooth.
-- Explain first-time ADB authorization and Bluetooth HID pairing.
-- No cloud relay is required for local control.
+- Pairing pins and ADB identities are stored in Android Keystore-backed storage.
+- Pairing codes, private keys and command payloads are not logged.
+- Only local private IPv4 ranges are scanned, with capped host count/concurrency.
+- Bluetooth permissions are requested only when Bluetooth is selected.
+- No cloud relay is required.
 
 ## Compatibility evidence
 
-A catalog entry is a candidate until a physical model has been tested. A model becomes Verified only after its firmware/platform and the listed capabilities have been recorded. Xiaomi Mi TV 4A is the first test target.
-
-
-## Xiaomi MiLink provider
-
-- Browse Xiaomi Cast DNS-SD service _googlecast._tcp and inspect TXT fields for a model identifier beginning with MiTV or MIBOX.
-- MiLink uses the TV's local TCP service on port 6091.
-- If mDNS discovery is filtered, the app performs a bounded private-subnet check for TCP 6091.
-- Key events use big-endian frames and TV-local timestamps (downTime / eventTime set to zero).
-- MiLink provides key navigation only. It does not provide a standard system pointer or installed-app inventory.
-- MiTV-MSSP0 / amelie remains a priority candidate until tested on the actual hardware and firmware.
-
-
-## Android TV Remote v2 provider
-
-- Discovery uses DNS-SD `_androidtvremote2._tcp`; a bounded local subnet scan checks TCP 6466 when mDNS is unavailable.
-- The user opens the TV's pairing UI and enters its six-character code in the app.
-- Pairing uses TLS 1.2 on TCP 6467. After pairing, the TV certificate fingerprint is pinned per host.
-- The remote-control connection uses TLS 1.2 on TCP 6466 and rejects a changed certificate until the device is paired again.
-- The provider currently sends Android key events. It does not implement a standard system pointer or installed-app inventory.
-- Phone hotspot and shared Wi-Fi select the network path; the advertised TV service selects the remote protocol.
+A catalog entry is a candidate until a physical model has been tested. A model becomes Verified only after its platform/firmware and listed capabilities are recorded. Xiaomi Mi TV 4A is the first target but remains unverified until tested.

@@ -15,16 +15,16 @@ No brand below is marked Verified yet.
 
 | Reported model | Product family | Device codename | Android | Board / ABI | Status |
 |---|---|---|---|---|---|
-| MiTV-MSSP0 | Xiaomi Mi TV 4A 32 | amelie | Android 9 / API 28 | m5621, armeabi-v7a | Priority test candidate. MiLink discovery and TCP 6091 transport are implemented, but this exact firmware has not been physically tested. |
+| MiTV-MSSP0 | Xiaomi Mi TV 4A 32 | amelie | Android 9 / API 28 | m5621, armeabi-v7a | Priority test candidate. Android TV Remote v2 is implemented as the primary network provider; this exact firmware has not been physically tested. |
 
 
 ## Android TV / Google TV families
 
-Implemented network provider: Android TV Remote v2 over local network (mDNS discovery, six-character on-screen pairing, TLS/protobuf control). MiLink is an additional Xiaomi-specific provider. ADB is an optional advanced path. Exact model and firmware support remains unverified until physically tested.
+Implemented network provider: Android TV Remote v2 over the local network (mDNS discovery, six-character on-screen pairing, pinned TLS/protobuf control). ADB is an optional advanced path for app inventory and touch coordinates. Exact model and firmware support remains unverified until physically tested.
 
 | Brand / family | Candidate models / product lines | Status | Notes |
 |---|---|---|---|
-| Xiaomi | MiTV-MSSP0 / Mi TV 4A 32 (amelie), Mi TV 4S, Mi TV 4X, Mi TV P1, Xiaomi TV A / Q series, Mi Boxes | Candidate | MiLink is attempted when the Xiaomi Cast service is advertised and TCP 6091 is reachable. Exact model/firmware testing is still required. |
+| Xiaomi | MiTV-MSSP0 / Mi TV 4A 32 (amelie), Mi TV 4S, Mi TV 4X, Mi TV P1, Xiaomi TV A / Q series, Mi Boxes | Candidate | Android TV Remote v2 is attempted first. Exact model/firmware testing is still required. |
 | Sony | BRAVIA Android TV / Google TV | Candidate | Remote service availability varies by generation. |
 | TCL | Android TV / Google TV models | Candidate | Do not assume every TCL model runs the same platform. |
 | Hisense | Android TV / Google TV models | Candidate | VIDAA models use a different provider. |
@@ -95,9 +95,8 @@ Xiaomi Mi TV 4A is the priority device. Do not mark it Verified until the exact 
 
 | Provider | Current controls | Limitations |
 |---|---|---|
-| Xiaomi MiLink | Discovery, TCP 6091, D-pad, OK, Back, Home and Menu | No system mouse pointer or app inventory through this provider. Exact MiTV-MSSP0 test pending. |
-| ADB TCP / Wireless debugging | Keys, tap/swipe, Leanback app discovery and launch | Requires network ADB and TV-side authorization. Android 9 firmware may require a separate network-ADB option. |
+| Android TV Remote v2 | mDNS/TCP 6466 discovery, six-character pairing over TLS 6467, pinned TLS control on 6466, D-pad, OK, Back, Home, Menu and app links | No standard pointer or installed-app inventory through this provider. Exact model/firmware testing is still required. |
+| ADB TCP | Keys, tap/swipe, Leanback app discovery and launch | Requires network ADB and TV-side authorization. Android 11+ wireless-debugging pairing is not implemented. |
 | Bluetooth HID | Phone as keyboard and relative mouse | TV must act as HID host and pair from its own Bluetooth accessory menu. |
-| Android TV Remote v2 | mDNS discovery, six-character pairing over TLS 6467 and control over TLS 6466 | Implemented in the app. Exact model/firmware testing is still required. No standard pointer or installed-app inventory through this provider. |
 | Samsung Tizen / LG webOS / Roku / VIDAA | Candidate platforms | Separate protocol providers and model-level tests required. |
 

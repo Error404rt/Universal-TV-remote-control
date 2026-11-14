@@ -1,50 +1,111 @@
 # Universal Remote Control
 
 A local-first Android TV remote with a pure-black interface and custom white outline controls.
+Built for the Xiaomi Mi TV 4A 32 (`MiTV-MSSP0` / `amelie`) and other Android TV / Google TV devices.
 
 ## Interface
 
-- Three horizontal swipe screens: Devices, Remote and Touchpad.
-- Remote: circular D-pad with OK, separate outline Menu, Back and Home controls.
-- Bottom indicators: the active screen is a small white dot; inactive screens show outline icons. The left icon reflects the active connection type (Wi-Fi, phone hotspot or Bluetooth).
-- Quick-launch app slots and a plus action to choose apps installed on the TV.
-- Touchpad: rounded rectangular surface with click, right-click and Back controls.
+The app has three horizontally swiped screens:
+
+1. **Touchpad** (swipe right from Remote): rounded square outline surface. Bluetooth HID gives a real relative pointer; ADB gives tap/swipe; Android TV Remote translates taps and swipes into D-pad focus movement.
+2. **Remote** (start screen): circular outline D-pad with OK, plus separate outline Menu, Back and Home buttons. Menu opens the TV's own menu. Up to three quick-launch app slots and a plus action live below the buttons.
+3. **Devices**: saved and discovered TVs, top-right **Connect**, manual IP, refresh and connection status.
+
+The bottom bar uses a small dot for the active screen and outline icons for the inactive ones.
+The left indicator reflects the selected connection method: Bluetooth, phone or Wi-Fi.
+
+Everything is drawn with Compose Canvas / Foundation: no Material components, filled buttons, shadows or cards.
+
+## First launch
+
+A one-time onboarding sheet explains:
+
+- phone and TV must share a network;
+- Android TV Remote pairing uses the six-character code shown by the TV;
+- **USB debugging is not required for the remote** — it is only needed for the optional ADB features (full installed-app list, package launch and touch coordinates);
+- on Xiaomi: Settings → About → click **Build** seven times → enable **USB debugging** / **Network debugging** if ADB is wanted;
+- Bluetooth HID pairing starts from the TV's Bluetooth menu.
 
 ## Connection methods
 
-1. **Shared Wi-Fi**: phone and TV are on the same local network.
-2. **Phone hotspot**: the TV must already have the phone hotspot credentials saved or be connected to it once from TV network settings. An ordinary Android app cannot force an arbitrary TV to join a hotspot or read the hotspot password.
-3. **Bluetooth HID**: the phone presents itself as a Bluetooth keyboard/mouse. The TV must support Bluetooth HID host input and initiate pairing from its Bluetooth accessories screen.
+The Connect action contains exactly three choices.
 
-## Implemented local providers
+### 1. Bluetooth HID
 
-- **Android TV Remote v2**: discovers `_androidtvremote2._tcp`, pairs with the six-character code shown on the TV over TLS port 6467, then controls the TV over TLS port 6466. USB debugging is not required.
-- **Xiaomi MiLink**: discovers Xiaomi Mi TV / Mi Box devices advertising a Xiaomi model TXT record under _googlecast._tcp and connects to MiLink on TCP 6091. No ADB or USB debugging is required for this provider.
-- **ADB TCP / Android Wireless debugging**: optional advanced provider for Android-based TVs that expose ADB and accept the TV-side authorization prompt or pairing code.
-- **Bluetooth HID**: phone-as-keyboard/mouse provider for televisions that support HID host input.
+The phone registers as a Bluetooth HID keyboard, relative mouse and consumer-control device.
+Pairing is initiated on the TV: **Bluetooth → Add accessory → Universal Remote Control**.
+The phone cannot force a TV to become a HID host; firmware support varies.
 
-Android TV Remote v2 currently sends remote key events, but does not expose installed-app inventory or a standard system mouse pointer. The installed Leanback app list and app launching currently require ADB. MiLink supports key navigation only. Bluetooth HID is the true pointer path.
+### 2. Phone hotspot
 
-MiLink sends real Android key events including D-pad, OK, Back, Home and Menu. It does not expose a standard system mouse pointer or installed-app list; touchpad movement in a MiLink session is translated into D-pad navigation. Bluetooth HID is the current true mouse-pointer path. ADB tap/swipe is a touch-input fallback.
+The TV must already have this hotspot saved (or be connected to it once from the TV's network settings).
+Android does not let an ordinary app enable a hotspot silently, so the app opens the system tethering screen, reports the hotspot interface/address, and then discovers the TV over the hotspot subnet.
+If the TV has not saved the hotspot, no phone-side app can make it join automatically.
 
-## Priority test TV
+### 3. Shared Wi-Fi
 
-- Xiaomi MiTV-MSSP0 / Mi TV 4A 32
-- Device codename: amelie
-- Android 9 / API 28
-- Board: m5621
-- ABI: armeabi-v7a
+Phone and TV are connected to the same router/network.
+The app discovers the TV through DNS-SD and a bounded private IPv4 subnet probe.
 
-MiLink discovery and the port-6091 provider are included for this model family, but the exact firmware still needs physical verification. If the TV does not advertise the Xiaomi service or TCP 6091 is closed, use ADB only if its firmware exposes network ADB, or try Bluetooth HID if the TV supports keyboard/mouse pairing.
+## Implemented providers
 
-## Compatibility policy
+- **Android TV Remote v2** (primary): discovers `_androidtvremote2._tcp`, pairs using the TV's six-character code over TLS 6467, pins the TV certificate, and controls it over TLS 6466. No USB debugging is needed.
+- **ADB TCP** (optional): classic network ADB on port 5555 with the TV-side authorization prompt. Adds installed-app inventory, package launch and tap/swipe input. Android 11+ wireless-debugging pairing is not implemented.
+- **Bluetooth HID**: true relative pointer path when the TV supports Bluetooth mouse input.
 
-A brand in the catalogue is a candidate, not a guarantee. Android TV / Google TV sets can expose Android TV Remote v2, ADB or another service depending on model and firmware. Samsung Tizen, LG webOS, Roku and VIDAA require their own providers and are not implemented in this build. See docs/compatibility-matrix.md.
+Android TV Remote and ADB are network protocols selected automatically after choosing **Phone hotspot** or **Shared Wi-Fi**.
+The app prefers Android TV Remote when both protocols are available because it requires no ADB authorization.
+
+## Multi-TV support
+
+TVs that have been connected are persisted with their protocol and connection method.
+Saved TVs remain visible while offline and can be reconnected or removed independently.
+Selecting another TV replaces the active connection; quick-app selections are stored per TV.
+
+## Quick apps
+
+The plus button opens the app picker and allows up to three shortcuts.
+With ADB, the list contains launchable apps installed on the TV.
+With Android TV Remote only, the TV does not expose its installed-app list, so the picker shows a curated catalog (YouTube, Netflix, Prime Video, Disney+, IVI, Kodi and others) and launch depends on the TV's app-link capability.
+
+## Xiaomi Mi TV 4A 32
+
+- Model: `MiTV-MSSP0`, codename `amelie`, Android 9 / API 28, `armeabi-v7a`.
+- Primary path: Android TV Remote v2, which is expected on Android TV firmware and does not require ADB.
+- If a specific firmware does not advertise the remote service, use shared Wi-Fi/ADB when network ADB is exposed, or Bluetooth HID when the TV supports keyboard/mouse pairing.
+- Exact firmware behavior still needs physical verification; the model is not marked Verified.
+
+## Limitations
+
+- A normal Android app cannot enable/disable the phone hotspot or force a TV to join it.
+- Android TV Remote exposes key events and app links, not a system pointer or the installed-app inventory.
+- ADB tap/swipe is touch injection, not a system mouse cursor.
+- Bluetooth HID depends on TV-side HID host support.
+- Samsung Tizen, LG webOS, Roku and VIDAA need separate protocols and are not implemented.
 
 ## Build
 
-GitHub Actions creates a debug APK artifact named universal-remote-debug after a successful build.
-
 - JDK 17
-- Android SDK platform 36
+- Android SDK platform 36, build-tools 36.0.0
 - Gradle 9.6.0
+
+```bash
+gradle assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+GitHub Actions uploads the debug APK artifact as `universal-remote-debug`.
+
+## Tests
+
+```bash
+gradle testDebugUnitTest
+```
+
+Unit tests cover the protobuf wire codec, Android TV pairing digest, private-network validation and TV candidate merging.
+
+## Attribution
+
+Android TV Remote v2 interoperability is adapted from the MIT-licensed OpenTV-Remote project.
+ADB transport uses Kadb 1.3.0 (Apache-2.0).
+See `docs/THIRD_PARTY_NOTICES.md`.
