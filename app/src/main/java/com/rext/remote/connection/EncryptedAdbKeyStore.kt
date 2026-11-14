@@ -32,7 +32,7 @@ class EncryptedAdbKeyStore(context: Context) {
         }
 
         // Kadb 1.3 creates and keeps the PEM certificate/private-key pair in KadbCert.
-        KadbCert.get()
+        KadbCert.get(notAfter = System.currentTimeMillis() + TEN_YEARS_MS)
         val pair = KadbCert.getOrError()
         writeIdentity(pair.first, pair.second)
     }
@@ -113,6 +113,7 @@ class EncryptedAdbKeyStore(context: Context) {
         private const val TAG_LENGTH_BITS = 128
         private const val TAG_LENGTH_BYTES = TAG_LENGTH_BITS / 8
         private const val MAX_IDENTITY_FIELD = 16 * 1024
+        private const val TEN_YEARS_MS = 10L * 365L * 24L * 60L * 60L * 1000L
     }
 }
 

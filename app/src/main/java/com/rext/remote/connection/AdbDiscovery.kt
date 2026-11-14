@@ -21,7 +21,7 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-enum class AdbEndpointKind { TCP, TLS_CONNECT, TLS_PAIRING, MI_LINK }
+enum class AdbEndpointKind { TCP, TLS_CONNECT, TLS_PAIRING, MI_LINK, ANDROID_TV_REMOTE_V2 }
 
 data class AdbEndpoint(
     val name: String,
@@ -159,6 +159,21 @@ class AdbDiscovery(context: Context) : AutoCloseable {
         }.awaitAll().filterNotNull().distinctBy { it.key }
     }
 
+    /** Bounded fallback scan for Android TV Remote v2 control service on TCP 6466. */
+    suspend fun scanAndroidTvRemote(connectTimeoutMs: Int = 280): List<AdbEndpoint> = withContext(Dispatchers.IO) {
+        require(connectTimeoutMs in 100..5000)
+        val hosts = enumeratePrivateHosts().take(MAX_TOTAL_HOSTS)
+        val semaphore = Semaphore(MAX_CONCURRENT_PROBES)
+        hosts.map { host ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    probe(host, ANDROID_TV_REMOTE_PORT, connectTimeoutMs,
+                        AdbEndpointKind.ANDROID_TV_REMOTE_V2, "Android TV / Google TV")
+                }
+            }
+        }.awaitAll().filterNotNull().distinctBy { it.key }
+    }
+
     /** Bounded fallback scan for Xiaomi MiLink local TCP service on port 6091. */
     suspend fun scanMiLink(connectTimeoutMs: Int = 280): List<AdbEndpoint> = withContext(Dispatchers.IO) {
         require(connectTimeoutMs in 100..5000)
@@ -266,12 +281,14 @@ class AdbDiscovery(context: Context) : AutoCloseable {
         private const val MAX_TOTAL_HOSTS = 1024
         private const val MAX_CONCURRENT_PROBES = 24
         private const val MILINK_PORT = 6091
+        private const val ANDROID_TV_REMOTE_PORT = 6466
 
         private val SERVICE_TYPES = listOf(
             "_adb._tcp." to AdbEndpointKind.TCP,
             "_adb-tls-connect._tcp." to AdbEndpointKind.TLS_CONNECT,
             "_adb-tls-pairing._tcp." to AdbEndpointKind.TLS_PAIRING,
-            "_googlecast._tcp." to AdbEndpointKind.MI_LINK
+            "_googlecast._tcp." to AdbEndpointKind.MI_LINK,
+            "_androidtvremote2._tcp." to AdbEndpointKind.ANDROID_TV_REMOTE_V2
         )
     }
 }
