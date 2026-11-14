@@ -32,7 +32,7 @@ Core models:
 ## Discovery
 
 Use protocol-specific discovery:
-- Kadb mDNS: _adb._tcp, _adb-tls-connect._tcp, _adb-tls-pairing._tcp.
+- Android NsdManager mDNS: _adb._tcp, _adb-tls-connect._tcp, _adb-tls-pairing._tcp.
 - Bounded local IPv4 subnet probe for classic ADB TCP port 5555 when ADB mDNS is missing.
 - Android TV Remote v2: _androidtvremote2._tcp discovery and its own pairing flow (separate provider, future stage).
 - Samsung / LG / Roku: platform-specific local discovery (future providers).
