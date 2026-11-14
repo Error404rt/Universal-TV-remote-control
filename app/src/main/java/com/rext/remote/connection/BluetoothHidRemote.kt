@@ -67,7 +67,7 @@ class BluetoothHidRemote(context: Context) {
                     if (connectedHost?.address == device.address) connectedHost = null
                     updateState(if (registered) HidConnectionState.WAITING_FOR_TV else HidConnectionState.ERROR)
                 }
-                BluetoothProfile.STATE_CONNECTING -> state = HidConnectionState.REGISTERING
+                BluetoothProfile.STATE_CONNECTING -> updateState(HidConnectionState.REGISTERING)
                 BluetoothProfile.STATE_DISCONNECTING -> Unit
             }
         }
