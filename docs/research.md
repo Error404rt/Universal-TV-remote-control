@@ -10,7 +10,7 @@ https://github.com/flyfishxu/Kadb
 - Kotlin Multiplatform ADB client.
 - Apache-2.0 license.
 - Provides classic ADB TCP, Android 11+ wireless pairing, shell commands and optional mDNS discovery.
-- The app currently uses the Kadb client for the ADB transport and its separate Android mDNS artifact for _adb._tcp, _adb-tls-connect._tcp and _adb-tls-pairing._tcp.
+- The app currently uses the Kadb client for ADB transport and Android's built-in NsdManager for _adb._tcp, _adb-tls-connect._tcp and _adb-tls-pairing._tcp discovery.
 - Kadb's own build uses JitPack for the spake2-java pairing dependency; the REXT build includes that repository.
 - ADB key persistence in REXT uses its own Android Keystore-backed AES-GCM store.
 
