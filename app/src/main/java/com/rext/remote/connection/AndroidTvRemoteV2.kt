@@ -157,15 +157,20 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
     }
 
     fun disconnect() {
+        closeSockets()
+        activeHost = null
+        featureMask = 0
+        mutableState.value = AndroidTvRemoteState()
+    }
+
+    /** Close pairing and control channels without changing the selected TV identity. */
+    private fun closeSockets() {
         readerJob?.cancel()
         readerJob = null
         val pair = pairingSocket
         val remote = remoteSocket
         pairingSocket = null
         remoteSocket = null
-        activeHost = null
-        featureMask = 0
-        mutableState.value = AndroidTvRemoteState()
         runCatching { pair?.close() }
         runCatching { remote?.close() }
     }
