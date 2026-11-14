@@ -83,12 +83,12 @@ private fun RemoteApp() {
                 detectHorizontalDragGestures(
                     onHorizontalDrag = { _, amount -> drag += amount },
                     onDragEnd = {
-                        if (drag < -55f) page = when (page) {
+                        if (drag > 55f) page = when (page) {
                             Page.DEVICES -> Page.REMOTE
                             Page.REMOTE -> Page.MOUSE
                             Page.MOUSE -> Page.MOUSE
                         }
-                        if (drag > 55f) page = when (page) {
+                        if (drag < -55f) page = when (page) {
                             Page.DEVICES -> Page.DEVICES
                             Page.REMOTE -> Page.DEVICES
                             Page.MOUSE -> Page.REMOTE
@@ -174,29 +174,33 @@ private fun RemotePage(onDevices: () -> Unit, onMouse: () -> Unit) {
 
 @Composable
 private fun DPad() {
-    Canvas(modifier = Modifier.fillMaxWidth().aspectRatio(1f).padding(8.dp)) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val radius = size.minDimension * .235f
-        val line = size.minDimension * .018f
-        drawCircle(White, radius, Offset(cx, cy), style = Stroke(line))
-        drawLine(White, Offset(cx, cy - radius - 62), Offset(cx, cy - radius - 10), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx, cy + radius + 10), Offset(cx, cy + radius + 62), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx - radius - 62, cy), Offset(cx - radius - 10, cy), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx + radius + 10, cy), Offset(cx + radius + 62, cy), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx - line * 3, cy - radius - 62), Offset(cx, cy - radius - 78), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx, cy - radius - 78), Offset(cx + line * 3, cy - radius - 62), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx - line * 3, cy + radius + 62), Offset(cx, cy + radius + 78), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx, cy + radius + 78), Offset(cx + line * 3, cy + radius + 62), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx - radius - 62, cy - line * 3), Offset(cx - radius - 78, cy), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx - radius - 78, cy), Offset(cx - radius - 62, cy + line * 3), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx + radius + 62, cy - line * 3), Offset(cx + radius + 78, cy), line * 3.1f, cap = StrokeCap.Round)
-        drawLine(White, Offset(cx + radius + 78, cy), Offset(cx + radius + 62, cy + line * 3), line * 3.1f, cap = StrokeCap.Round)
-    }
     Box(
-        modifier = Modifier.size(1.dp),
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f).padding(8.dp),
         contentAlignment = Alignment.Center
-    ) { }
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            val radius = size.minDimension * .235f
+            val line = size.minDimension * .018f
+            val reach = radius + size.minDimension * .19f
+            drawCircle(White, radius, Offset(cx, cy), style = Stroke(line))
+            // Four rounded chevrons, matching the supplied outline reference.
+            fun chevron(points: List<Offset>) {
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(points.first().x, points.first().y)
+                    points.drop(1).forEach { lineTo(it.x, it.y) }
+                }
+                drawPath(path, White, style = Stroke(line * 3.2f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            }
+            val arm = size.minDimension * .055f
+            chevron(listOf(Offset(cx-arm, cy-reach+arm), Offset(cx, cy-reach), Offset(cx+arm, cy-reach+arm)))
+            chevron(listOf(Offset(cx-arm, cy+reach-arm), Offset(cx, cy+reach), Offset(cx+arm, cy+reach-arm)))
+            chevron(listOf(Offset(cx-reach+arm, cy-arm), Offset(cx-reach, cy), Offset(cx-reach+arm, cy+arm)))
+            chevron(listOf(Offset(cx+reach-arm, cy-arm), Offset(cx+reach, cy), Offset(cx+reach-arm, cy+arm)))
+        }
+        Text("OK", color = White, fontSize = 34.sp, fontWeight = FontWeight.Light)
+    }
 }
 
 @Composable
@@ -209,7 +213,7 @@ private fun OutlineAction(label: String) {
                 "MENU" -> {
                     repeat(3) { i ->
                         val y = s * (.2f + i * .3f)
-                        drawCircle(White, stroke * .48f, Offset(s * .18f, y))
+                        drawCircle(White, stroke * .48f, Offset(s * .18f, y), style = Stroke(stroke * .7f))
                         drawLine(White, Offset(s * .38f, y), Offset(s * .88f, y), stroke, cap = StrokeCap.Round)
                     }
                 }
