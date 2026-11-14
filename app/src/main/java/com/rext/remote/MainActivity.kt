@@ -281,6 +281,8 @@ private fun DevicesPage(
             Text("Devices", color = White, fontSize = 22.sp, fontWeight = FontWeight.Medium)
             TextButton(onClick = onConnect) { Text("Connect", color = White) }
         }
+        Spacer(Modifier.height(18.dp))
+        NavigationMarks(Page.DEVICES, {}, onRemote, onMouse)
         Spacer(Modifier.height(28.dp))
         Text("Found devices", color = Muted, fontSize = 13.sp)
         Spacer(Modifier.height(14.dp))
@@ -297,7 +299,6 @@ private fun DevicesPage(
             TextButton(onClick = onConnect) { Text("Connect", color = White) }
         }
         Spacer(Modifier.weight(1f))
-        NavigationMarks(Page.DEVICES, {}, onRemote, onMouse)
     }
 }
 
