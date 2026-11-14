@@ -1,54 +1,72 @@
 # REXT Remote
 
-A modern Android TV remote built around a minimal monochrome outline interface.
+A local Android TV remote with a minimal black-and-white outline interface.
 
-> Project status: early prototype. UI skeleton and compatibility research are committed; device discovery and real control providers are not implemented yet.
+> Project status: active prototype. The custom UI, ADB discovery foundation, encrypted ADB identity storage, ADB input client, Bluetooth HID input provider and initial device catalog are in progress. Physical TV compatibility is not yet verified.
 
-## Product direction
+## Visual direction
 
-REXT Remote has three user-selected connection methods inside the selected TV's Connect flow:
+The app uses the supplied reference as its design specification:
+- Pure black background.
+- Thin white rounded outline controls and icons.
+- No Material Design components, Material icons, filled buttons, shadows or decorative cards.
+- Circular D-pad with four outline arrows and OK.
+- Menu, Back and Home as separate outline controls.
+- Square outline touch surface for mouse mode.
+- Three small section indicators. They are visual indicators, not tappable tabs.
+- Horizontal swipe navigation: Mouse ↔ Remote ↔ Devices.
 
-1. **Bluetooth HID** — the phone acts as a Bluetooth keyboard/mouse/remote when the TV supports Bluetooth HID host input.
-2. **Phone hotspot** — the TV and phone share the phone's hotspot network; the selected TV protocol still performs control.
-3. **Shared Wi-Fi** — the phone and TV are already on the same local network.
+Compose Foundation and Canvas are used as a rendering/input toolkit only. The interface itself is custom-drawn.
 
-These are connection choices, not app navigation tabs. After a method is selected, the app returns to the TV list and shows the icon for the active connection type.
+## Three connection choices
 
-The app's three swipe-navigated sections are:
-- Devices / connection
-- Remote
-- Mouse
+The selected TV's Connect action offers exactly three connection methods:
 
-The UI follows the supplied reference: black background, white rounded outline controls, a circular D-pad with OK, Menu, Back and Home, and a square outline touch surface for mouse mode. The navigation indicators adapt their placement to the active screen.
+1. **Bluetooth** — phone advertises as a Bluetooth HID keyboard/mouse. The TV must support Bluetooth HID host input and pair from its Bluetooth accessory menu.
+2. **Phone hotspot** — the TV joins the phone's normal internet-sharing hotspot. REXT then discovers it on that local network and connects using the TV's supported protocol.
+3. **Shared Wi-Fi** — phone and TV are already on the same local network.
 
-## Current repository contents
+These are connection methods, not app navigation sections. The connected TV shows the icon matching the selected method: Bluetooth, phone, or Wi-Fi.
 
-- Initial Jetpack Compose application skeleton.
-- First UI prototype for the D-pad, navigation indicators, device list and Connect method chooser.
-- Initial broad TV compatibility catalog.
-- Architecture and protocol research notes.
-- GitHub Actions workflow to build and upload a debug APK.
+A phone hotspot is network topology, not a remote-control protocol. The app cannot universally force a TV to join the hotspot or enter its Wi-Fi password. The TV needs to have the hotspot credentials saved or the user must connect it once in TV settings. Once the TV is attached and reachable, REXT can discover and connect to it.
 
-The current UI is a prototype. The displayed device is placeholder data; it does not discover or control a TV yet.
+## Current connection foundation
+
+- ADB mDNS discovery for classic ADB, Android 11+ Wireless debugging and pairing endpoints.
+- Bounded local IPv4 subnet probe for classic ADB TCP port 5555 when mDNS is absent.
+- ADB identity encrypted with AES-GCM using Android Keystore.
+- ADB model/firmware inspection, key events, touch gestures and Leanback-launchable app discovery.
+- Bluetooth HID keyboard, relative mouse and consumer-control reports.
+- Manual IP fallback for classic ADB TCP.
+- The app only displays a TV as connected after an ADB shell handshake or Bluetooth HID connection callback succeeds.
+
+### Important first-time steps
+
+- Classic ADB over TCP requires the TV to expose its ADB network endpoint and accept the app's RSA authorization prompt.
+- Android 11+ Wireless debugging requires the user to enable Wireless debugging on the TV and complete its pairing-code flow.
+- USB debugging being enabled alone does not always expose port 5555 over Wi-Fi.
+- Bluetooth HID pairing is initiated from the TV's Bluetooth accessory menu. Keep REXT open in the foreground while using the HID mouse/keyboard mode; Android may unregister HID apps when the app leaves the foreground.
+
+## TV compatibility
+
+See the compatibility catalog in docs/compatibility-matrix.md.
+
+The catalog includes Android TV / Google TV, Samsung Tizen, LG webOS, Roku, Fire TV, VIDAA, SmartCast and other candidate platform families. A brand or model family is a candidate until a physical model/firmware and its features have been tested.
+
+**Xiaomi Mi TV 4A is the first priority test target.** Its exact hardware revision, Android/firmware version and enabled debugging services must be recorded before marking it Verified.
 
 ## Build
 
-GitHub Actions builds a debug APK on pushes to main and manual workflow runs. Download the artifact named rext-remote-debug from the workflow run.
+GitHub Actions builds a debug APK on pushes to main and manual workflow runs. Download the artifact named rext-remote-debug from a successful run.
 
-Local build requirements:
 - JDK 17
 - Android SDK platform 36
 - Gradle 9.6.0
 
-## Research and compatibility
+## Research
 
-See:
-- [Architecture](docs/architecture.md)
-- [TV compatibility catalog](docs/compatibility-matrix.md)
-- [Open-source protocol research](docs/research.md)
-
-Xiaomi Mi TV 4A is the first priority test target. Model-level support will be marked Verified only after a real connection and capability test.
+See docs/architecture.md and docs/research.md. External repositories are used for protocol study, not for copying their UI. Source code is reused only when the license and attribution requirements are compatible and recorded.
 
 ## License
 
-To be decided before publishing implementation code.
+To be decided before public implementation release.
