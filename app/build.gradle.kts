@@ -44,7 +44,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     implementation("com.flyfishxu:kadb:2.1.5")
-    implementation("com.flyfishxu:kadb-mdns-android:2.1.5")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
