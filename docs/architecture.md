@@ -100,3 +100,13 @@ A provider advertises only the capabilities it can actually deliver. A D-pad wor
 ## Compatibility evidence
 
 A catalog entry is a candidate until a physical model has been tested. A model becomes Verified only after its firmware/platform and the listed capabilities have been recorded. Xiaomi Mi TV 4A is the first test target.
+
+
+## Xiaomi MiLink provider
+
+- Browse Xiaomi Cast DNS-SD service _googlecast._tcp and inspect TXT fields for a model identifier beginning with MiTV or MIBOX.
+- MiLink uses the TV's local TCP service on port 6091.
+- If mDNS discovery is filtered, the app performs a bounded private-subnet check for TCP 6091.
+- Key events use big-endian frames and TV-local timestamps (downTime / eventTime set to zero).
+- MiLink provides key navigation only. It does not provide a standard system pointer or installed-app inventory.
+- MiTV-MSSP0 / amelie remains a priority candidate until tested on the actual hardware and firmware.

@@ -11,13 +11,20 @@ This is an intentionally broad discovery catalog. A listed brand or family is a 
 
 No brand below is marked Verified yet.
 
+## Priority target device
+
+| Reported model | Product family | Device codename | Android | Board / ABI | Status |
+|---|---|---|---|---|---|
+| MiTV-MSSP0 | Xiaomi Mi TV 4A 32 | amelie | Android 9 / API 28 | m5621, armeabi-v7a | Priority test candidate. MiLink discovery and TCP 6091 transport are implemented, but this exact firmware has not been physically tested. |
+
+
 ## Android TV / Google TV families
 
 Primary protocol candidate: Android TV Remote v2 over local network (mDNS discovery, on-screen pairing, TLS/protobuf control). ADB is an optional diagnostic/advanced path, not the default control protocol.
 
 | Brand / family | Candidate models / product lines | Status | Notes |
 |---|---|---|---|
-| Xiaomi | Mi TV 4A (priority), Mi TV 4S, Mi TV 4X, Mi TV P1, Xiaomi TV A / Q series | Candidate | Mi TV 4A must be tested by exact hardware/firmware revision. |
+| Xiaomi | MiTV-MSSP0 / Mi TV 4A 32 (amelie), Mi TV 4S, Mi TV 4X, Mi TV P1, Xiaomi TV A / Q series, Mi Boxes | Candidate | MiLink is attempted when the Xiaomi Cast service is advertised and TCP 6091 is reachable. Exact model/firmware testing is still required. |
 | Sony | BRAVIA Android TV / Google TV | Candidate | Remote service availability varies by generation. |
 | TCL | Android TV / Google TV models | Candidate | Do not assume every TCL model runs the same platform. |
 | Hisense | Android TV / Google TV models | Candidate | VIDAA models use a different provider. |
@@ -82,3 +89,15 @@ For every physical test, record:
 ## First test target
 
 Xiaomi Mi TV 4A is the priority device. Do not mark it Verified until the exact variant and firmware are tested. Android TV Remote v2 is a strong first network-protocol candidate; Bluetooth HID should be tested independently as a separate connection method.
+
+
+## Provider implementation status
+
+| Provider | Current controls | Limitations |
+|---|---|---|
+| Xiaomi MiLink | Discovery, TCP 6091, D-pad, OK, Back, Home and Menu | No system mouse pointer or app inventory through this provider. Exact MiTV-MSSP0 test pending. |
+| ADB TCP / Wireless debugging | Keys, tap/swipe, Leanback app discovery and launch | Requires network ADB and TV-side authorization. Android 9 firmware may require a separate network-ADB option. |
+| Bluetooth HID | Phone as keyboard and relative mouse | TV must act as HID host and pair from its own Bluetooth accessory menu. |
+| Android TV Remote v2 | Candidate next provider | Not yet implemented in this app. |
+| Samsung Tizen / LG webOS / Roku / VIDAA | Candidate platforms | Separate protocol providers and model-level tests required. |
+
