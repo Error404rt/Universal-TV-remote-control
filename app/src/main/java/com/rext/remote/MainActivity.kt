@@ -74,6 +74,8 @@ import com.rext.remote.connection.AdbDiscovery
 import com.rext.remote.connection.AdbEndpoint
 import com.rext.remote.connection.AdbEndpointKind
 import com.rext.remote.connection.AdbRemoteClient
+import com.rext.remote.connection.AndroidTvRemoteV2
+import com.rext.remote.connection.AndroidTvRemotePhase
 import com.rext.remote.connection.BluetoothHidRemote
 import com.rext.remote.connection.HidConnectionState
 import com.rext.remote.connection.MouseButton
@@ -120,6 +122,8 @@ private fun RextRemoteApp() {
     val hidState by hid.stateFlow.collectAsState()
     val miLink = remember { MiLinkRemote() }
     val miLinkConnected by miLink.stateFlow.collectAsState()
+    val androidTvRemote = remember { AndroidTvRemoteV2(context) }
+    val androidTvRemoteState by androidTvRemote.stateFlow.collectAsState()
     val pager = rememberPagerState(initialPage = 1, pageCount = { 3 })
 
     var endpoints by remember { mutableStateOf<List<AdbEndpoint>>(emptyList()) }
@@ -160,6 +164,7 @@ private fun RextRemoteApp() {
             adb.close()
             hid.disconnect()
             miLink.close()
+            androidTvRemote.close()
         }
     }
 
@@ -172,12 +177,13 @@ private fun RextRemoteApp() {
         }
         val classic = runCatching { discovery.scanClassicAdb() }.getOrDefault(emptyList())
         val miLinkDevices = runCatching { discovery.scanMiLink() }.getOrDefault(emptyList())
-        endpoints = (endpoints + classic + miLinkDevices)
+        val androidTvDevices = runCatching { discovery.scanAndroidTvRemote() }.getOrDefault(emptyList())
+        endpoints = (endpoints + classic + miLinkDevices + androidTvDevices)
             .distinctBy { it.key }
             .sortedWith(compareBy<AdbEndpoint> { it.host }.thenBy { it.kind.ordinal })
         scanning = false
         if (endpoints.isEmpty()) {
-            connectionStatus = "Устройства пока не найдены. Проверь сеть телевизора и доступность MiLink, ADB или Bluetooth."
+            connectionStatus = "Устройства пока не найдены. Проверь сеть телевизора и доступность Android TV Remote, MiLink, ADB или Bluetooth."
         } else {
             connectionStatus = "Найдено устройств: ${endpoints.size}"
         }
@@ -196,6 +202,28 @@ private fun RextRemoteApp() {
             HidConnectionState.WAITING_FOR_TV -> connectionStatus =
                 "Открой Bluetooth на телевизоре и выбери Universal Remote Control"
             HidConnectionState.ERROR -> connectionStatus = "Bluetooth HID недоступен. Проверь сопряжение и разрешения."
+            else -> Unit
+        }
+    }
+
+    LaunchedEffect(androidTvRemoteState) {
+        when (androidTvRemoteState.phase) {
+            AndroidTvRemotePhase.AWAITING_CODE -> {
+                pairTarget = selectedEndpoint?.takeIf { it.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2 }
+                pairingCode = ""
+                showPairingSheet = true
+                connectionStatus = androidTvRemoteState.message
+            }
+            AndroidTvRemotePhase.CONNECTED -> {
+                tvIdentity = null
+                tvDisplayName = selectedEndpoint?.name?.takeIf { it.isNotBlank() }
+                    ?: androidTvRemoteState.host.orEmpty().ifBlank { "Android TV" }
+                activeMethod = pendingMethod ?: activeMethod
+                pendingMethod = null
+                connectionStatus = androidTvRemoteState.message
+                pager.animateScrollToPage(1)
+            }
+            AndroidTvRemotePhase.ERROR -> connectionStatus = androidTvRemoteState.message
             else -> Unit
         }
     }
@@ -239,6 +267,20 @@ private fun RextRemoteApp() {
     fun connectEndpoint(endpoint: AdbEndpoint, method: ConnectionMethod) {
         selectedEndpoint = endpoint
         pendingMethod = method
+        if (endpoint.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2) {
+            scope.launch {
+                connecting = true
+                connectionStatus = "Подключаюсь к Android TV Remote…"
+                try {
+                    androidTvRemote.connect(endpoint.host)
+                } catch (error: Throwable) {
+                    connectionStatus = error.message?.take(160) ?: "Android TV Remote недоступен"
+                } finally {
+                    connecting = false
+                }
+            }
+            return
+        }
         if (endpoint.kind == AdbEndpointKind.MI_LINK) {
             scope.launch {
                 connecting = true
@@ -330,6 +372,8 @@ private fun RextRemoteApp() {
                     if (key != null) hid.sendNavigationKey(key)
                     else if (keyCode == 3) hid.sendConsumerUsage(0x0223)
                     else if (keyCode == 82) hid.sendConsumerUsage(0x0040)
+                } else if (androidTvRemote.isConnected()) {
+                    androidTvRemote.sendKey(keyCode)
                 } else if (adb.isConnected()) {
                     adb.sendKey(keyCode)
                 } else if (miLink.isConnected()) {
@@ -350,7 +394,7 @@ private fun RextRemoteApp() {
         }
     }
 
-    val connected = adb.isConnected() || hidState == HidConnectionState.CONNECTED || miLinkConnected
+    val connected = adb.isConnected() || hidState == HidConnectionState.CONNECTED || miLinkConnected || androidTvRemoteState.phase == AndroidTvRemotePhase.CONNECTED
     val displayedDevice = tvIdentity?.title ?: tvDisplayName.ifBlank { "Телевизор не подключён" }
     val currentPage = pager.currentPage
 
@@ -448,6 +492,7 @@ private fun RextRemoteApp() {
                         adb.disconnect()
                         hid.disconnect()
                         miLink.disconnect()
+                        androidTvRemote.forget()
                         tvIdentity = null
                         tvDisplayName = ""
                         activeMethod = null
@@ -468,19 +513,40 @@ private fun RextRemoteApp() {
             PairingCodeSheet(
                 host = pairTarget!!.host,
                 code = pairingCode,
-                onCode = { pairingCode = it.filter(Char::isDigit).take(6) },
-                onClose = { showPairingSheet = false },
+                androidTvRemote = pairTarget!!.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2,
+                onCode = {
+                    pairingCode = if (pairTarget?.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2) {
+                        it.filter { char -> char.isDigit() || char.lowercaseChar() in 'a'..'f' }
+                            .take(6).uppercase()
+                    } else {
+                        it.filter(Char::isDigit).take(6)
+                    }
+                },
+                onClose = {
+                    showPairingSheet = false
+                    if (pairTarget?.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2) {
+                        androidTvRemote.disconnect()
+                    }
+                },
                 onPair = {
                     val target = pairTarget!!
                     val code = pairingCode
                     showPairingSheet = false
                     scope.launch {
                         connecting = true
-                        connectionStatus = "Сопрягаю ADB…"
+                        connectionStatus = if (target.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2) {
+                            "Сопрягаю Android TV Remote…"
+                        } else {
+                            "Сопрягаю ADB…"
+                        }
                         try {
-                            adb.pairWireless(target.host, target.port, code)
-                            connectionStatus = "Сопряжение готово. Ищу TLS-подключение…"
-                            scanRequest += 1
+                            if (target.kind == AdbEndpointKind.ANDROID_TV_REMOTE_V2) {
+                                androidTvRemote.pair(code)
+                            } else {
+                                adb.pairWireless(target.host, target.port, code)
+                                connectionStatus = "Сопряжение готово. Ищу TLS-подключение…"
+                                scanRequest += 1
+                            }
                         } catch (error: Throwable) {
                             connectionStatus = error.message?.take(140) ?: "ADB-сопряжение не прошло"
                         } finally {
@@ -627,6 +693,7 @@ private fun DevicesPage(
                     AdbEndpointKind.TLS_PAIRING -> "ADB pairing"
                     AdbEndpointKind.MI_LINK -> endpoint.model?.takeIf { it.isNotBlank() }
                         ?: endpoint.name.ifBlank { "Xiaomi TV (MiLink)" }
+                    AdbEndpointKind.ANDROID_TV_REMOTE_V2 -> endpoint.name.ifBlank { "Android TV / Google TV" }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth()
@@ -648,6 +715,7 @@ private fun DevicesPage(
                             AdbEndpointKind.TLS_CONNECT -> "TLS"
                             AdbEndpointKind.TLS_PAIRING -> "PAIR"
                             AdbEndpointKind.MI_LINK -> "MILINK"
+                            AdbEndpointKind.ANDROID_TV_REMOTE_V2 -> "TV REMOTE"
                         },
                         9.sp,
                         if (isSelected) Paper else Dim,
@@ -673,7 +741,7 @@ private fun DevicesPage(
                         letterSpacing = 2.sp
                     )
                     UiText(
-                        "Для Xiaomi ищем MiLink автоматически. Для ADB включи сетевую отладку и подтверди подключение; для Bluetooth выбери телефон в Bluetooth-настройках телевизора.",
+                        "Для Android TV / Google TV ищем Android TV Remote автоматически. Для Xiaomi также проверяем MiLink. ADB требует сетевой отладки, Bluetooth HID требует сопряжения со стороны телевизора.",
                         12.sp,
                         Dim,
                         textAlign = TextAlign.Center,
@@ -969,7 +1037,7 @@ private fun ConnectMethodSheet(
         }
         Spacer(Modifier.height(8.dp))
         UiText(
-            "Hotspot задаёт локальную сеть. После подключения телевизор ищется через совместимые протоколы управления, например MiLink или ADB.",
+            "Hotspot задаёт локальную сеть. После подключения ищем Android TV Remote, Xiaomi MiLink или ADB.",
             11.sp,
             Dim
         )
@@ -980,14 +1048,26 @@ private fun ConnectMethodSheet(
 private fun PairingCodeSheet(
     host: String,
     code: String,
+    androidTvRemote: Boolean,
     onCode: (String) -> Unit,
     onClose: () -> Unit,
     onPair: () -> Unit
 ) {
-    OverlayFrame(title = "WIRELESS PAIRING", onClose = onClose) {
+    OverlayFrame(
+        title = if (androidTvRemote) "ANDROID TV PAIRING" else "WIRELESS PAIRING",
+        onClose = onClose
+    ) {
         UiText("Телевизор: $host", 12.sp, Dim)
         Spacer(Modifier.height(12.dp))
-        UiText("На телевизоре открой Developer options → Wireless debugging → Pair device with pairing code.", 12.sp, Paper)
+        UiText(
+            if (androidTvRemote) {
+                "Введи шестисимвольный код, который показан в системном окне сопряжения Android TV Remote на телевизоре."
+            } else {
+                "На телевизоре открой Developer options → Wireless debugging → Pair device with pairing code."
+            },
+            12.sp,
+            Paper
+        )
         Spacer(Modifier.height(20.dp))
         BasicTextField(
             value = code,
@@ -998,7 +1078,12 @@ private fun PairingCodeSheet(
             singleLine = true,
             decorationBox = { inner ->
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    if (code.isEmpty()) UiText("000000", 20.sp, Hairline, letterSpacing = 5.sp)
+                    if (code.isEmpty()) UiText(
+                        if (androidTvRemote) "A1B2C3" else "000000",
+                        20.sp,
+                        Hairline,
+                        letterSpacing = 5.sp
+                    )
                     inner()
                 }
             }

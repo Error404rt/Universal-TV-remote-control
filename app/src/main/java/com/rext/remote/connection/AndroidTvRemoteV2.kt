@@ -368,12 +368,14 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
                 (parts[0] == 192 && parts[1] == 168))
     }.getOrDefault(false)
 
+    private fun List<Proto.Field>.num(field: Int): Int =
+        firstOrNull { it.number == field }?.value?.toInt() ?: 0
+
+    private fun List<Proto.Field>.nested(field: Int): List<Proto.Field> =
+        firstOrNull { it.number == field }?.bytes?.let { Proto.parse(it) } ?: emptyList()
+
     private object Proto {
-        data class Field(val number: Int, val value: Long = 0, val bytes: ByteArray? = null) {
-            fun num(field: Int): Int = nested(field).firstOrNull { it.number == field }?.value?.toInt() ?: 0
-            fun nested(field: Int): List<Field> =
-                this.bytes?.let(::parse)?.filter { it.number == field } ?: emptyList()
-        }
+        data class Field(val number: Int, val value: Long = 0, val bytes: ByteArray? = null)
 
         fun varint(value: Long): ByteArray {
             require(value >= 0)
@@ -423,7 +425,7 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
                         val length = readVarint(input)
                         require(length in 0..MAX_FRAME_SIZE && length <= input.available())
                         val data = ByteArray(length.toInt())
-                        input.readFully(data)
+                        require(input.read(data) == data.size)
                         fields += Field(number, bytes = data)
                     }
                     1 -> require(input.skip(8) == 8L)
