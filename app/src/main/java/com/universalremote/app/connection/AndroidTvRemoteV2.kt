@@ -14,8 +14,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
+import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.KeyFactory
 import java.security.MessageDigest
 import java.security.Principal
@@ -25,6 +27,7 @@ import java.security.cert.X509Certificate
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.PKCS8EncodedKeySpec
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509TrustManager
@@ -343,8 +346,34 @@ class AndroidTvRemoteV2(context: Context) : AutoCloseable {
             return socket
         } catch (error: Throwable) {
             runCatching { socket.close() }
-            throw error
+            throw remoteConnectError(host, port, error)
         }
+    }
+
+    private fun remoteConnectError(host: String, port: Int, error: Throwable): Throwable {
+        val raw = error.message.orEmpty()
+        // Keep the certificate/pairing messages produced by the trust manager.
+        if (raw.contains("Сертификат") || raw.contains("повторное сопряжение", true)) return error
+        val message = when {
+            error is ConnectException ||
+                raw.contains("ECONNREFUSED", true) ||
+                raw.contains("Connection refused", true) -> {
+                if (port == PAIRING_PORT) {
+                    "Android TV Remote: порт сопряжения 6467 закрыт. На ТВ открой «Пульты и аксессуары» → " +
+                        "«Добавить аксессуар» или подключись по ADB."
+                } else {
+                    "Android TV Remote: порт управления 6466 закрыт. Служба пульта не запущена — подключись по ADB."
+                }
+            }
+            error is SocketTimeoutException || raw.contains("timed out", true) -> {
+                "Телевизор не ответил по Android TV Remote ($host:$port). Проверь, что он включён и в той же сети."
+            }
+            error is SSLException -> {
+                "Не удалось установить защищённое соединение с телевизором: ${raw.take(110)}"
+            }
+            else -> return error
+        }
+        return IllegalStateException(message, error)
     }
 
     private fun clientIdentity(): Pair<X509Certificate, PrivateKey> {

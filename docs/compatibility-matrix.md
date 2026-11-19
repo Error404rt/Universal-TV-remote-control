@@ -15,7 +15,7 @@ No brand below is marked Verified yet.
 
 | Reported model | Product family | Device codename | Android | Board / ABI | Status |
 |---|---|---|---|---|---|
-| MiTV-MSSP0 | Xiaomi Mi TV 4A 32 | amelie | Android 9 / API 28 | m5621, armeabi-v7a | Priority test candidate. Android TV Remote v2 is implemented as the primary network provider; this exact firmware has not been physically tested. |
+| MiTV-MSSP0 | Xiaomi Mi TV 4A 32 | amelie | Android 9 / API 28 | m5621, armeabi-v7a | Partially verified: on the test unit TCP 6466/6467 refused connections while ADB 5555 was open. The app now verifies advertised ports and falls back to ADB. Final remote/ADB command test pending. |
 
 
 ## Android TV / Google TV families

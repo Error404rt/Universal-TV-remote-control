@@ -232,7 +232,7 @@ class TvDiscovery(context: Context) : AutoCloseable {
             }
         }
 
-    private fun publish(info: NsdServiceInfo, kind: TvEndpointKind) {
+    private suspend fun publish(info: NsdServiceInfo, kind: TvEndpointKind) {
         @Suppress("DEPRECATION")
         val host = if (Build.VERSION.SDK_INT >= 34) {
             info.hostAddresses.filterIsInstance<Inet4Address>().firstOrNull()?.hostAddress
@@ -258,6 +258,10 @@ class TvDiscovery(context: Context) : AutoCloseable {
             kind = kind,
             model = model.takeIf { it.isNotBlank() }
         )
+        if (seen.containsKey(endpoint.key)) return
+        // Some firmwares advertise a service while the port is not listening.
+        // Only surface endpoints that actually accept a TCP connection.
+        if (!portOpen(host, info.port, MDNS_PROBE_TIMEOUT_MS)) return
         if (seen.putIfAbsent(endpoint.key, endpoint) == null) {
             callback?.invoke(endpoint)
         }
@@ -303,13 +307,18 @@ class TvDiscovery(context: Context) : AutoCloseable {
         timeoutMs: Int,
         kind: TvEndpointKind,
         name: String
-    ): TvEndpoint? = runCatching {
+    ): TvEndpoint? = if (portOpen(host, port, timeoutMs)) {
+        TvEndpoint(name, host, port, kind)
+    } else {
+        null
+    }
+
+    private fun portOpen(host: String, port: Int, timeoutMs: Int): Boolean = runCatching {
         Socket().use { socket ->
             socket.tcpNoDelay = true
             socket.connect(InetSocketAddress(host, port), timeoutMs)
         }
-        TvEndpoint(name, host, port, kind)
-    }.getOrNull()
+    }.isSuccess
 
     private data class ResolveRequest(
         val info: NsdServiceInfo,
@@ -323,6 +332,7 @@ class TvDiscovery(context: Context) : AutoCloseable {
         private const val MAX_TOTAL_HOSTS = 1024
         private const val MAX_CONCURRENT_PROBES = 32
         private const val RESOLVE_TIMEOUT_MS = 3_500L
+        private const val MDNS_PROBE_TIMEOUT_MS = 700
         private const val ADB_PORT = 5555
         private const val ANDROID_TV_REMOTE_PORT = 6466
 

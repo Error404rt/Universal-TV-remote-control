@@ -192,12 +192,39 @@ private fun UniversalRemoteApp() {
         }
     }
 
-    fun connectEndpoint(endpoint: TvEndpoint, method: ConnectionMethod, name: String) {
+    suspend fun connectAdbEndpoint(endpoint: TvEndpoint, method: ConnectionMethod, name: String) {
+        status = "Подключаюсь к ${endpoint.host}:${endpoint.port} по ADB…"
+        try {
+            val identity = adb.connect(endpoint.host, endpoint.port)
+            tvIdentity = identity
+            activeHost = identity.host
+            activeName = identity.title
+            activeMethod = method
+            saveTv(endpoint, identity.title, method)
+            status = "Подключено: ${identity.title}"
+            pendingTarget = null
+            pendingName = ""
+            pendingMethod = null
+            pager.animateScrollToPage(1)
+        } catch (error: Throwable) {
+            adb.disconnect()
+            activeMethod = null
+            status = error.message?.take(180)
+                ?: "Не удалось подключиться по ADB. Подтверди отладку на телевизоре."
+        }
+    }
+
+    fun connectEndpoint(
+        endpoint: TvEndpoint,
+        method: ConnectionMethod,
+        name: String,
+        fallbackAdb: TvEndpoint? = null
+    ) {
         selected = candidates.firstOrNull { it.host == endpoint.host }
             ?: TvCandidate(
                 host = endpoint.host,
                 name = name,
-                endpoints = listOf(endpoint),
+                endpoints = listOfNotNull(endpoint, fallbackAdb),
                 saved = null
             )
         pendingTarget = endpoint
@@ -216,7 +243,15 @@ private fun UniversalRemoteApp() {
                     try {
                         tvRemote.connect(endpoint.host)
                     } catch (error: Throwable) {
-                        status = error.message?.take(180) ?: "Android TV Remote недоступен"
+                        tvRemote.disconnect()
+                        if (fallbackAdb != null) {
+                            status = "Android TV Remote недоступен на этом телевизоре. Пробую ADB…"
+                            connectAdbEndpoint(fallbackAdb, method, name)
+                        } else {
+                            activeMethod = null
+                            status = error.message?.take(180)
+                                ?: "Android TV Remote недоступен. Подключись по ADB или Bluetooth."
+                        }
                     } finally {
                         connecting = false
                     }
@@ -228,23 +263,8 @@ private fun UniversalRemoteApp() {
                 scope.launch {
                     if (connecting) return@launch
                     connecting = true
-                    status = "Подключаюсь к ${endpoint.host}:${endpoint.port} по ADB…"
                     try {
-                        val identity = adb.connect(endpoint.host, endpoint.port)
-                        tvIdentity = identity
-                        activeHost = identity.host
-                        activeName = identity.title
-                        activeMethod = method
-                        saveTv(endpoint, identity.title, method)
-                        status = "Подключено: ${identity.title}"
-                        pendingTarget = null
-                        pendingName = ""
-                        pendingMethod = null
-                        pager.animateScrollToPage(1)
-                    } catch (error: Throwable) {
-                        adb.disconnect()
-                        status = error.message?.take(180)
-                            ?: "Не удалось подключиться по ADB. Подтверди отладку на телевизоре."
+                        connectAdbEndpoint(endpoint, method, name)
                     } finally {
                         connecting = false
                     }
@@ -262,10 +282,16 @@ private fun UniversalRemoteApp() {
             startBluetooth()
             return
         }
-        val live = candidate.endpoints.firstOrNull { it.protocol == TvProtocol.ANDROID_TV_REMOTE }
-            ?: candidate.endpoints.firstOrNull { it.protocol == TvProtocol.ADB }
+        val remote = candidate.endpoint(TvProtocol.ANDROID_TV_REMOTE)
+        val adbEndpoint = candidate.endpoint(TvProtocol.ADB)
+        val live = remote ?: adbEndpoint
         if (live != null) {
-            connectEndpoint(live, method, candidate.name)
+            connectEndpoint(
+                live,
+                method,
+                candidate.name,
+                fallbackAdb = adbEndpoint.takeIf { live.protocol == TvProtocol.ANDROID_TV_REMOTE }
+            )
             return
         }
         status = "Проверяю ${candidate.host}…"
@@ -276,12 +302,18 @@ private fun UniversalRemoteApp() {
                 .getOrDefault(emptyList())
             endpoints = mergeEndpoints(endpoints, probed)
             connecting = false
-            val endpoint = probed.firstOrNull { it.protocol == TvProtocol.ANDROID_TV_REMOTE }
-                ?: probed.firstOrNull { it.protocol == TvProtocol.ADB }
+            val remoteEndpoint = probed.firstOrNull { it.protocol == TvProtocol.ANDROID_TV_REMOTE }
+            val adbProbed = probed.firstOrNull { it.protocol == TvProtocol.ADB }
+            val endpoint = remoteEndpoint ?: adbProbed
             if (endpoint == null) {
                 status = "${candidate.name}: телевизор не отвечает. Включи его и проверь сеть."
             } else {
-                connectEndpoint(endpoint, method, candidate.name)
+                connectEndpoint(
+                    endpoint,
+                    method,
+                    candidate.name,
+                    fallbackAdb = adbProbed.takeIf { endpoint.protocol == TvProtocol.ANDROID_TV_REMOTE }
+                )
             }
         }
     }

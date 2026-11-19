@@ -56,6 +56,7 @@ Jetpack Compose Foundation + Canvas are used for layout, gestures and drawing. E
 - Saved hosts are probed explicitly even when their subnet is no longer scanned.
 - Only RFC1918/private and CGNAT addresses are accepted. Probe count and concurrency are capped.
 - mDNS callbacks are lossy; rows stay visible until refresh instead of flickering on service-lost events.
+- Every mDNS-advertised endpoint is verified with a short TCP probe before it is shown, because some firmware advertises a service while its port is closed.
 
 A discovered TCP port is only a candidate. ADB requires a shell handshake and TV-side authorization. Android TV Remote requires successful pairing/control state.
 
@@ -65,7 +66,7 @@ A discovered TCP port is only a candidate. ADB requires a shell handshake and TV
 2. Bluetooth starts HID registration and phone discoverability.
 3. Hotspot/Wi-Fi refresh network state, open system settings if needed, then scan.
 4. Tapping a candidate connects using its saved method or the pending method.
-5. Android TV Remote may ask for the six-character TV code.
+5. Android TV Remote may ask for the six-character TV code. If its pairing/control port refuses the connection and the same TV exposes ADB, the app retries over ADB automatically.
 6. Successful connections are saved with the selected method.
 7. Switching TV disconnects the previous transport without discarding saved pairings.
 

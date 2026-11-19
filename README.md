@@ -55,6 +55,9 @@ The app discovers the TV through DNS-SD and a bounded private IPv4 subnet probe.
 
 Android TV Remote and ADB are network protocols selected automatically after choosing **Phone hotspot** or **Shared Wi-Fi**.
 The app prefers Android TV Remote when both protocols are available because it requires no ADB authorization.
+mDNS-advertised endpoints are verified with a TCP probe, so a stale service entry is not shown as reachable.
+If the TV refuses the Android TV Remote pairing port (6467) but exposes ADB, the app automatically retries the same TV over ADB.
+This is the expected path for the tested Mi TV 4A 32 unit, whose remote service ports were closed while ADB 5555 was open.
 
 ## Multi-TV support
 
@@ -71,9 +74,11 @@ With Android TV Remote only, the TV does not expose its installed-app list, so t
 ## Xiaomi Mi TV 4A 32
 
 - Model: `MiTV-MSSP0`, codename `amelie`, Android 9 / API 28, `armeabi-v7a`.
-- Primary path: Android TV Remote v2, which is expected on Android TV firmware and does not require ADB.
-- If a specific firmware does not advertise the remote service, use shared Wi-Fi/ADB when network ADB is exposed, or Bluetooth HID when the TV supports keyboard/mouse pairing.
-- Exact firmware behavior still needs physical verification; the model is not marked Verified.
+- Network behavior observed on the test unit: TCP 6466 and 6467 (Android TV Remote control/pairing) refused connections, while TCP 5555 (ADB) was open.
+- The app therefore falls back to ADB automatically when the remote pairing port is closed. The TV shows its normal «Разрешена отладка?» prompt on the first ADB connection.
+- Android TV Remote remains the preferred path on firmware where ports 6466/6467 are actually listening.
+- ADB is also required for the installed-app list, package launch and tap/swipe on this unit. Bluetooth HID remains an option when the TV accepts keyboard/mouse pairing.
+- Remote/ADB command behavior still needs the final on-device check; the model is not marked fully Verified.
 
 ## Limitations
 
